@@ -217,10 +217,10 @@ exports.getKeyInventory = async (req, res) => {
 exports.getKeyValidityTimeline = async (req, res) => {
     try {
         const now = new Date();
-        const in6Months = new Date(now.getTime() + 6 * 30 * 24 * 60 * 60 * 1000);
-        const in12Months = new Date(now.getTime() + 12 * 30 * 24 * 60 * 60 * 1000);
-        const in18Months = new Date(now.getTime() + 18 * 30 * 24 * 60 * 60 * 1000);
-        const in24Months = new Date(now.getTime() + 24 * 30 * 24 * 60 * 60 * 1000);
+        const in6Months = new Date(now.getFullYear(), now.getMonth() + 6, now.getDate());
+        const in12Months = new Date(now.getFullYear(), now.getMonth() + 12, now.getDate());
+        const in18Months = new Date(now.getFullYear(), now.getMonth() + 18, now.getDate());
+        const in24Months = new Date(now.getFullYear(), now.getMonth() + 24, now.getDate()); // Adjusted to calendar months for precision
 
         const keys_0_6 = await Key.countDocuments({ validUntil: { $gt: now, $lte: in6Months }, isAssigned: true });
         const keys_6_12 = await Key.countDocuments({ validUntil: { $gt: in6Months, $lte: in12Months }, isAssigned: true });
@@ -230,13 +230,24 @@ exports.getKeyValidityTimeline = async (req, res) => {
         // Summary statistics
         const validKeys = await Key.countDocuments({ validUntil: { $gt: now }, isAssigned: true });
         const expiringSoon = await Key.countDocuments({ validUntil: { $lte: in6Months, $gte: now }, isAssigned: true });
-        // Average validity (in months)
+        
+        // Average validity (in months) - improved calculation
         const assignedKeys = await Key.find({ isAssigned: true });
         let avgValidity = 0;
         if (assignedKeys.length > 0) {
             const totalMonths = assignedKeys.reduce((sum, k) => {
-                const months = (k.validUntil - now) / (30 * 24 * 60 * 60 * 1000);
-                return sum + months;
+                const yearsDiff = k.validUntil.getFullYear() - now.getFullYear();
+                const monthsDiff = k.validUntil.getMonth() - now.getMonth();
+                const daysDiff = k.validUntil.getDate() - now.getDate();
+                let totalMonthsForSingleKey = yearsDiff * 12 + monthsDiff;
+                if (daysDiff < 0) { // If the day of the month is less, it hasn't completed that month yet
+                    totalMonthsForSingleKey -= 1;
+                } else if (daysDiff > 0) {
+                    // If days are positive, it means it's X months and Y days, so it should be slightly more than X months
+                    // For simplicity, we can add a fraction based on days
+                    totalMonthsForSingleKey += (daysDiff / 30); // Approximate fractional month
+                }
+                return sum + totalMonthsForSingleKey;
             }, 0);
             avgValidity = totalMonths / assignedKeys.length;
         }
@@ -277,7 +288,7 @@ exports.getNdList = async (req, res) => {
             createdAt: nd.createdAt,
             updatedAt: nd.updatedAt
         }));
-        res.status(200).json(result);
+        res.status(200).json({ message: 'National Distributors fetched successfully.', nds: result });
     } catch (error) {
         console.error('Error fetching ND list:', error);
         res.status(500).json({ message: 'Server error during ND list retrieval.' });
@@ -606,4 +617,102 @@ exports.addNd = async (req, res) => {
         console.error('Error adding new ND for Admin:', error);
         res.status(500).json({ message: 'Server error during ND creation.' });
     }
-}; 
+};
+
+// PATCH /admin/nd/:ndId
+exports.editNd = async (req, res) => {
+    try {
+        const { ndId } = req.params;
+        const { name, email, phone, location, status, companyName, notes } = req.body;
+
+        const ndUser = await User.findById(ndId);
+        if (!ndUser || ndUser.role !== 'nd') {
+            return res.status(404).json({ message: 'National Distributor not found.' });
+        }
+
+        // Update fields if provided
+        if (name) ndUser.name = name;
+        if (email) {
+            const existingUser = await User.findOne({ email, _id: { $ne: ndId } });
+            if (existingUser) {
+                return res.status(409).json({ message: 'User with this email already exists.' });
+            }
+            ndUser.email = email;
+        }
+        if (phone) ndUser.phone = phone;
+        if (location) ndUser.location = location;
+        if (status) ndUser.status = status;
+        if (companyName) ndUser.companyName = companyName;
+        if (notes) ndUser.notes = notes;
+
+        await ndUser.save();
+
+        res.status(200).json({ message: 'National Distributor updated successfully.', nd: ndUser });
+
+    } catch (error) {
+        console.error('Error updating ND:', error);
+        res.status(500).json({ message: 'Server error during ND update.' });
+    }
+};
+
+// PATCH /admin/nd/deactivate/:ndId
+exports.deactivateNd = async (req, res) => {
+    try {
+        const { ndId } = req.params;
+        const ndUser = await User.findById(ndId);
+
+        if (!ndUser || ndUser.role !== 'nd') {
+            return res.status(404).json({ message: 'National Distributor not found.' });
+        }
+
+        ndUser.status = 'inactive';
+        await ndUser.save();
+
+        res.status(200).json({ message: 'National Distributor deactivated successfully.', nd: ndUser });
+    } catch (error) {
+        console.error('Error deactivating ND:', error);
+        res.status(500).json({ message: 'Server error during ND deactivation.' });
+    }
+};
+
+// PATCH /admin/nd/block/:ndId
+exports.blockNd = async (req, res) => {
+    try {
+        const { ndId } = req.params;
+        const ndUser = await User.findById(ndId);
+
+        if (!ndUser || ndUser.role !== 'nd') {
+            return res.status(404).json({ message: 'National Distributor not found.' });
+        }
+
+        ndUser.status = 'blocked';
+        await ndUser.save();
+
+        res.status(200).json({ message: 'National Distributor blocked successfully.', nd: ndUser });
+    } catch (error) {
+        console.error('Error blocking ND:', error);
+        res.status(500).json({ message: 'Server error during ND blocking.' });
+    }
+};
+
+// DELETE /admin/nd/:ndId
+exports.deleteNd = async (req, res) => {
+    try {
+        const { ndId } = req.params;
+        const ndUser = await User.findById(ndId);
+
+        if (!ndUser || ndUser.role !== 'nd') {
+            return res.status(404).json({ message: 'National Distributor not found.' });
+        }
+
+        // Optionally, reassign keys or handle them as needed before deletion
+        // For now, keys assigned to this ND will become unassigned
+        await Key.updateMany({ assignedTo: ndId }, { $set: { isAssigned: false, assignedTo: null } });
+        await ndUser.deleteOne();
+
+        res.status(200).json({ message: 'National Distributor deleted successfully.' });
+    } catch (error) {
+        console.error('Error deleting ND:', error);
+        res.status(500).json({ message: 'Server error during ND deletion.' });
+    }
+};

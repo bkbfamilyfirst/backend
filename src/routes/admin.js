@@ -45,4 +45,16 @@ router.get('/key-transfer-logs', authenticateToken, authorizeRole(['admin']), ad
 // GET /admin/key-transfer-logs/export
 router.get('/key-transfer-logs/export', authenticateToken, authorizeRole(['admin']), adminController.exportKeyTransferLogs);
 
+// PATCH /admin/nd/:ndId - Edit ND
+router.patch('/nd/:ndId', authenticateToken, authorizeRole(['admin']), adminController.editNd);
+
+// PATCH /admin/nd/deactivate/:ndId - Deactivate ND
+router.patch('/nd/deactivate/:ndId', authenticateToken, authorizeRole(['admin']), adminController.deactivateNd);
+
+// PATCH /admin/nd/block/:ndId - Block ND
+router.patch('/nd/block/:ndId', authenticateToken, authorizeRole(['admin']), adminController.blockNd);
+
+// DELETE /admin/nd/:ndId - Delete ND
+router.delete('/nd/:ndId', authenticateToken, authorizeRole(['admin']), adminController.deleteNd);
+
 module.exports = router; 

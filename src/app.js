@@ -1,5 +1,6 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const hierarchyRoutes = require('./routes/hierarchy');
 const adminRoutes = require('./routes/admin');
@@ -9,7 +10,17 @@ const ssRoutes = require('./routes/ss')
 const dbRoutes = require('./routes/db')
 const app = express();
 
+// CORS configuration
+const corsOptions = {
+    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    maxAge: 86400 // 24 hours
+};
+
 // Middleware
+app.use(cors(corsOptions));
 app.use(bodyParser.json()); // for parsing application/json
 
 // Routes
