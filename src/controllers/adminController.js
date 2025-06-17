@@ -4,6 +4,7 @@ const Parent = require('../models/Parent');
 const KeyTransferLog = require('../models/KeyTransferLog');
 const { generateCsv } = require('../utils/csv');
 const bcrypt = require('bcrypt');
+const { validationResult } = require('express-validator');
 
 // Helper to generate a unique hexadecimal key
 const generateHexKey = (length) => {
@@ -343,7 +344,7 @@ exports.getNdAssignments = async (req, res) => {
             count: log.count,
             date: log.date,
         }));
-        res.status(200).json(result);
+        res.status(200).json({ message: 'ND assignments fetched successfully.', assignments: result });
     } catch (error) {
         console.error('Error fetching ND assignments:', error);
         res.status(500).json({ message: 'Server error during ND assignments retrieval.' });
@@ -714,5 +715,127 @@ exports.deleteNd = async (req, res) => {
     } catch (error) {
         console.error('Error deleting ND:', error);
         res.status(500).json({ message: 'Server error during ND deletion.' });
+    }
+};
+
+// GET /admin/profile
+exports.getAdminProfile = async (req, res) => {
+    try {
+        // Assuming req.user contains the authenticated admin user's details (e.g., from auth middleware)
+        const adminUser = await User.findById(req.user._id).select('-password -refreshTokens -__v');
+
+        if (!adminUser || adminUser.role !== 'admin') {
+            return res.status(404).json({ message: 'Admin profile not found.' });
+        }
+
+        // Prepare data to match the frontend's PersonalInformation formData and AdminProfile interface
+        const profileData = {
+            _id: adminUser._id,
+            firstName: adminUser.firstName || (adminUser.name ? adminUser.name.split(' ')[0] : ''),
+            lastName: adminUser.lastName || (adminUser.name ? adminUser.name.split(' ').slice(1).join(' ') : ''),
+            email: adminUser.email,
+            phone: adminUser.phone,
+            address: adminUser.address || '', // Map 'address' directly
+            bio: adminUser.bio || '',
+            role: adminUser.role,
+            assignedKeys: adminUser.assignedKeys,
+            usedKeys: adminUser.usedKeys,
+            createdAt: adminUser.createdAt,
+            updatedAt: adminUser.updatedAt,
+            lastLogin: adminUser.lastLogin,
+            status: adminUser.status,
+            // Ensure the 'name' field is available for the AdminProfile interface, combine firstName and lastName
+            name: `${adminUser.firstName || ''} ${adminUser.lastName || ''}`.trim() || adminUser.name,
+        };
+
+        res.status(200).json(profileData);
+    } catch (error) {
+        console.error('Error fetching admin profile:', error);
+        res.status(500).json({ message: 'Server error during profile retrieval.' });
+    }
+};
+
+// PATCH /admin/profile
+exports.editAdminProfile = async (req, res) => {
+    try {
+        const { firstName, lastName, email, phone, address, bio } = req.body;
+        const adminUser = await User.findById(req.user._id);
+
+        if (!adminUser || adminUser.role !== 'admin') {
+            return res.status(404).json({ message: 'Admin profile not found.' });
+        }
+
+        // Update fields if provided
+        if (firstName !== undefined) adminUser.firstName = firstName;
+        if (lastName !== undefined) adminUser.lastName = lastName;
+        // Update the 'name' field based on firstName and lastName
+        adminUser.name = `${adminUser.firstName || ''} ${adminUser.lastName || ''}`.trim();
+
+
+        if (email !== undefined) {
+            // Check if new email already exists for another user
+            const existingUser = await User.findOne({ email, _id: { $ne: adminUser._id } });
+            if (existingUser) {
+                return res.status(409).json({ message: 'User with this email already exists.' });
+            }
+            adminUser.email = email;
+        }
+        if (phone !== undefined) adminUser.phone = phone;
+        if (address !== undefined) adminUser.address = address; // Update the 'address' field
+        if (bio !== undefined) adminUser.bio = bio;
+
+        await adminUser.save();
+
+        // Return updated profile data matching the frontend structure and AdminProfile interface
+        const updatedProfileData = {
+            _id: adminUser._id,
+            firstName: adminUser.firstName,
+            lastName: adminUser.lastName,
+            email: adminUser.email,
+            phone: adminUser.phone,
+            address: adminUser.address,
+            bio: adminUser.bio,
+            role: adminUser.role,
+            assignedKeys: adminUser.assignedKeys,
+            usedKeys: adminUser.usedKeys,
+            createdAt: adminUser.createdAt,
+            updatedAt: adminUser.updatedAt,
+            lastLogin: adminUser.lastLogin,
+            status: adminUser.status,
+            name: adminUser.name, // The combined name
+        };
+
+        res.status(200).json({ message: 'Profile updated successfully.', profile: updatedProfileData });
+    } catch (error) {
+        console.error('Error editing admin profile:', error);
+        res.status(500).json({ message: 'Server error during profile update.' });
+    }
+};
+
+// PATCH /admin/change-password
+exports.changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const adminUser = await User.findById(req.user._id); // Assuming req.user contains the authenticated admin user
+
+        if (!adminUser || adminUser.role !== 'admin') {
+            return res.status(404).json({ message: 'Admin not found.' });
+        }
+
+        // Verify current password
+        const isMatch = await bcrypt.compare(currentPassword, adminUser.password);
+        if (!isMatch) {
+            return res.status(401).json({ message: 'Invalid current password.' });
+        }
+
+        // Hash new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        adminUser.password = hashedPassword;
+        await adminUser.save();
+
+        res.status(200).json({ message: 'Password changed successfully.' });
+    } catch (error) {
+        console.error('Error changing password:', error);
+        res.status(500).json({ message: 'Server error during password change.' });
     }
 };

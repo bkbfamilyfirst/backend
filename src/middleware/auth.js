@@ -6,16 +6,26 @@ const authenticateToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
-    if (token == null) return res.sendStatus(401); // No token
+    if (token == null) {
+        return res.status(401).json({ message: 'Access token missing.' }); // No token provided
+    }
 
-    jwt.verify(token, process.env.JWT_SECRET || 'supersecretjwtkey', async (err, user) => {
-        if (err) return res.sendStatus(403); // Invalid token
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, async (err, user) => {
+        if (err) {
+            if (err.name === 'TokenExpiredError') {
+                return res.status(401).json({ message: 'Access token expired.', expired: true }); // Token expired
+            } else {
+                return res.status(403).json({ message: 'Invalid access token.' }); // Other JWT errors
+            }
+        }
 
         try {
-            const foundUser = await User.findById(user.id); // Fetch user from DB
-            if (!foundUser) return res.sendStatus(403); // User not found
+            const foundUser = await User.findById(user.id);
+            if (!foundUser) {
+                return res.status(403).json({ message: 'User not found.' }); // User not found in DB
+            }
 
-            req.user = foundUser; // Attach the full user object from DB
+            req.user = foundUser;
             next();
         } catch (error) {
             console.error('Error authenticating token:', error);

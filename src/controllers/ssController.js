@@ -114,8 +114,24 @@ const getDashboardSummary = async (req, res) => {
 // GET /ss/distributors
 const getDistributorList = async (req, res) => {
     try {
-        const distributors = await User.find({ role: 'db', createdBy: req.user._id }).select('name email phone role assignedKeys usedKeys createdBy location status');
-        res.status(200).json(distributors);
+        const distributors = await User.find({ role: 'db', createdBy: req.user._id }).select('name email phone role assignedKeys usedKeys createdBy location address status createdAt updatedAt');
+        
+        const formattedDistributors = distributors.map(db => ({
+            _id: db._id,
+            name: db.name,
+            email: db.email,
+            phone: db.phone,
+            role: db.role,
+            assignedKeys: db.assignedKeys || 0,
+            usedKeys: db.usedKeys || 0,
+            createdBy: db.createdBy,
+            status: db.status,
+            location: db.location || db.address || "Not specified",
+            createdAt: db.createdAt,
+            updatedAt: db.updatedAt
+        }));
+
+        res.status(200).json(formattedDistributors);
     } catch (error) {
         console.error('Error getting Distributor list for SS:', error);
         res.status(500).json({ message: 'Server error during Distributor list retrieval.' });
@@ -409,4 +425,4 @@ module.exports = {
     transferKeysToDb,
     getSsProfile,
     updateSsProfile,
-}; 
+};

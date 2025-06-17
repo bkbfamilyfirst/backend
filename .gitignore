@@ -40,3 +40,4 @@ dist/
 out/
 .next/
 .nuxt/ 
+.vercel

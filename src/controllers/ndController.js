@@ -7,8 +7,24 @@ const bcrypt = require('bcrypt');
 // GET /nd/ss-list
 const getSsList = async (req, res) => {
     try {
-        const ssList = await User.find({ role: 'ss', createdBy: req.user._id }).select('name email phone role assignedKeys usedKeys createdBy location status');
-        res.status(200).json(ssList);
+        const ssList = await User.find({ role: 'ss', createdBy: req.user._id }).select('-password');
+        const result = ssList.map(ss => ({
+            id: ss._id,
+            name: ss.name,
+            email: ss.email,
+            phone: ss.phone,
+            location: ss.address || ss.location, // Use address or location field
+            status: ss.status,
+            assignedKeys: ss.assignedKeys || 0,
+            usedKeys: ss.usedKeys || 0,
+            balance: (ss.assignedKeys || 0) - (ss.usedKeys || 0),
+            createdAt: ss.createdAt,
+            updatedAt: ss.updatedAt
+        }));
+        res.status(200).json({
+            message: 'State Supervisors fetched successfully.', 
+            ss: result
+        });
     } catch (error) {
         console.error('Error getting SS list for ND:', error);
         res.status(500).json({ message: 'Server error during SS list retrieval.' });
@@ -37,35 +53,55 @@ const getSsStats = async (req, res) => {
 const getKeyTransferLogs = async (req, res) => {
     try {
         const { startDate, endDate, status, type, search, page = 1, limit = 10 } = req.query;
-        const ssIds = await User.find({ role: 'ss', createdBy: req.user._id }).distinct('_id');
-        const filter = {
-            $or: [
-                { fromUser: req.user._id },
-                { toUser: req.user._id },
+        const ndUserId = req.user._id;
+        const ssIds = await User.find({ role: 'ss', createdBy: ndUserId }).distinct('_id');
+
+        let queryFilter = {};
+
+        // Apply type filter if specified
+        if (type === 'Sent') {
+            queryFilter.$or = [
+                { fromUser: ndUserId },
+                { fromUser: { $in: ssIds } }
+            ];
+        } else if (type === 'Received') {
+            queryFilter.$or = [
+                { toUser: ndUserId },
+                { toUser: { $in: ssIds } }
+            ];
+        } else { // 'All' or no type specified
+            queryFilter.$or = [
+                { fromUser: ndUserId },
+                { toUser: ndUserId },
                 { fromUser: { $in: ssIds } },
                 { toUser: { $in: ssIds } }
-            ]
-        };
-        if (startDate || endDate) {
-            filter.date = {};
-            if (startDate) filter.date.$gte = new Date(startDate);
-            if (endDate) filter.date.$lte = new Date(endDate);
-        }
-        if (status) filter.status = status;
-        if (type) filter.type = type;
-        if (search) {
-            filter.$or = [
-                { notes: { $regex: search, $options: 'i' } }
             ];
         }
+
+        // Apply date filter
+        if (startDate || endDate) {
+            queryFilter.date = {};
+            if (startDate) queryFilter.date.$gte = new Date(startDate);
+            if (endDate) queryFilter.date.$lte = new Date(endDate);
+        }
+
+        // Apply status filter
+        if (status) {
+            queryFilter.status = status;
+        }
+
+        // Initial query to MongoDB, populate users for name search later
         const skip = (parseInt(page) - 1) * parseInt(limit);
-        let query = KeyTransferLog.find(filter)
+        let query = KeyTransferLog.find(queryFilter)
             .sort({ date: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .populate('fromUser', 'name email role')
             .populate('toUser', 'name email role');
+
         let logs = await query.exec();
+
+        // Client-side filtering for populated user names if search term is present
         if (search) {
             logs = logs.filter(log =>
                 (log.fromUser && log.fromUser.name && log.fromUser.name.toLowerCase().includes(search.toLowerCase())) ||
@@ -73,18 +109,39 @@ const getKeyTransferLogs = async (req, res) => {
                 (log.notes && log.notes.toLowerCase().includes(search.toLowerCase()))
             );
         }
-        const total = await KeyTransferLog.countDocuments(filter);
-        const result = logs.map(log => ({
-            transferId: log._id,
-            timestamp: log.date,
-            from: log.fromUser ? { id: log.fromUser._id, name: log.fromUser.name, role: log.fromUser.role } : null,
-            to: log.toUser ? { id: log.toUser._id, name: log.toUser.name, role: log.toUser.role } : null,
-            count: log.count,
-            status: log.status,
-            type: log.type,
-            notes: log.notes,
-        }));
+        
+        // Count total documents for pagination without limit/skip
+        const total = await KeyTransferLog.countDocuments(queryFilter);
+
+        // Map logs to desired response format, including correct 'Type' for UI
+        const result = logs.map(log => {
+            let transactionTypeForUI = '';
+            if (log.toUser && log.toUser._id.toString() === ndUserId.toString()) {
+                transactionTypeForUI = 'Received';
+            } else if (log.fromUser && log.fromUser._id.toString() === ndUserId.toString()) {
+                transactionTypeForUI = 'Sent';
+            } else if (log.toUser && ssIds.includes(log.toUser._id.toString())) {
+                transactionTypeForUI = 'Received';
+            } else if (log.fromUser && ssIds.includes(log.fromUser._id.toString())) {
+                transactionTypeForUI = 'Sent';
+            } else {
+                transactionTypeForUI = log.type; 
+            }
+
+            return {
+                transferId: log._id,
+                timestamp: log.date,
+                from: log.fromUser ? { id: log.fromUser._id, name: log.fromUser.name, role: log.fromUser.role } : null,
+                to: log.toUser ? { id: log.toUser._id, name: log.toUser.name, role: log.toUser.role } : null,
+                count: log.count,
+                status: log.status,
+                type: transactionTypeForUI,
+                notes: log.notes,
+            };
+        });
+
         res.status(200).json({ total, page: parseInt(page), limit: parseInt(limit), logs: result });
+
     } catch (error) {
         console.error('Error fetching ND key transfer logs:', error);
         res.status(500).json({ message: 'Server error during key transfer logs retrieval.' });
@@ -217,25 +274,64 @@ const deleteSs = async (req, res) => {
 const updateSs = async (req, res) => {
     try {
         const { id } = req.params;
-        const updates = req.body;
+        const ndUserId = req.user._id;
 
-        const ss = await User.findOne({ _id: id, role: 'ss', createdBy: req.user._id });
-
-        if (!ss) {
-            return res.status(404).json({ message: 'State Supervisor not found or not authorized to update.' });
+        // Validate the ID parameter
+        if (!id || id === 'undefined') {
+            return res.status(400).json({ message: 'Invalid SS ID provided.' });
         }
 
-        // Prevent updating sensitive fields directly through this endpoint
-        delete updates.role;
-        delete updates.password;
-        delete updates.assignedKeys;
-        delete updates.usedKeys;
-        delete updates.createdBy;
-        delete updates.email; // Email should ideally not be changed or require a separate verification flow
+        // Validate ObjectId format
+        if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ message: 'Invalid SS ID format.' });
+        }
 
-        const updatedSs = await User.findByIdAndUpdate(id, { $set: updates }, { new: true, runValidators: true }).select('-password');
+        // Extract updatable fields from request body
+        const { firstName, lastName, phone, companyName, address, status } = req.body;
 
-        res.status(200).json(updatedSs);
+        // First, verify the SS exists and belongs to this ND
+        const existingSs = await User.findOne({ 
+            _id: id, 
+            role: 'ss', 
+            createdBy: ndUserId 
+        });
+
+        if (!existingSs) {
+            return res.status(404).json({ message: 'State Supervisor not found or not authorized.' });
+        }
+
+        // Build update object
+        const updates = {};
+        if (firstName !== undefined) updates.firstName = firstName;
+        if (lastName !== undefined) updates.lastName = lastName;
+        if (phone !== undefined) updates.phone = phone;
+        if (companyName !== undefined) updates.companyName = companyName;
+        if (address !== undefined) updates.address = address;
+        if (status !== undefined) updates.status = status;
+
+        // Construct 'name' from 'firstName' and 'lastName' if provided
+        if (firstName !== undefined || lastName !== undefined) {
+            const newFirstName = firstName !== undefined ? firstName : existingSs.firstName;
+            const newLastName = lastName !== undefined ? lastName : existingSs.lastName;
+            updates.name = `${newFirstName || ''} ${newLastName || ''}`.trim();
+        }
+
+        // Update the SS
+        const updatedSs = await User.findByIdAndUpdate(
+            id, 
+            { $set: updates }, 
+            { new: true, runValidators: true }
+        ).select('-password');
+
+        if (!updatedSs) {
+            return res.status(404).json({ message: 'State Supervisor not found.' });
+        }
+
+        res.status(200).json({ 
+            message: 'State Supervisor updated successfully.', 
+            ss: updatedSs 
+        });
+
     } catch (error) {
         console.error('Error updating SS for ND:', error);
         res.status(500).json({ message: 'Server error during SS update.' });
@@ -259,16 +355,27 @@ const getNdProfile = async (req, res) => {
 // PUT /nd/profile
 const updateNdProfile = async (req, res) => {
     try {
-        const updates = req.body;
         const ndUserId = req.user._id;
 
-        // Prevent updating sensitive fields
-        delete updates.role;
-        delete updates.password;
-        delete updates.assignedKeys;
-        delete updates.usedKeys;
-        delete updates.createdBy;
-        delete updates.email; // Email should ideally not be changed or require a separate verification flow
+        // Extract specific updatable fields from req.body
+        const { firstName, lastName, phone, companyName, address, bio } = req.body;
+
+        const updates = {};
+        if (firstName !== undefined) updates.firstName = firstName;
+        if (lastName !== undefined) updates.lastName = lastName;
+        if (phone !== undefined) updates.phone = phone;
+        if (companyName !== undefined) updates.companyName = companyName;
+        if (address !== undefined) updates.address = address;
+        if (bio !== undefined) updates.bio = bio;
+
+        // Construct 'name' from 'firstName' and 'lastName' if both are provided
+        if (firstName !== undefined && lastName !== undefined) {
+            updates.name = `${firstName} ${lastName}`.trim();
+        } else if (firstName !== undefined && !lastName) {
+            updates.name = firstName;
+        } else if (lastName !== undefined && !firstName) {
+            updates.name = lastName;
+        }
 
         const updatedNdProfile = await User.findByIdAndUpdate(ndUserId, { $set: updates }, { new: true, runValidators: true }).select('-password');
 

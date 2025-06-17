@@ -1,9 +1,16 @@
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
+    // Keep 'name' for backward compatibility or general use (e.g., full name).
+    // It can be constructed from firstName and lastName, or vice-versa, in the controller.
     name: {
         type: String,
-        required: true,
+    },
+    firstName: { // NEW FIELD: To directly match frontend's 'firstName' input
+        type: String,
+    },
+    lastName: {  // NEW FIELD: To directly match frontend's 'lastName' input
+        type: String,
     },
     email: {
         type: String,
@@ -38,15 +45,18 @@ const userSchema = new mongoose.Schema({
     companyName: {
         type: String,
     },
-    location: {
+    address: { // NEW FIELD: To directly match frontend's 'address' input (replaces 'location' if that was intended for full address)
         type: String,
     },
+    // If 'location' was intended for a different, less specific purpose (e.g., city/state), you can keep it as well.
+    // Otherwise, 'address' will be used for the full address.
+
     status: {
         type: String,
         enum: ['active', 'inactive', 'blocked'],
         default: 'active',
     },
-    bio: {
+    bio: { // Already present and matches frontend's 'bio'
         type: String,
     },
     lastLogin: {
@@ -56,8 +66,11 @@ const userSchema = new mongoose.Schema({
     notes: {
         type: String,
     },
+    refreshTokens: [{
+        type: String,
+    }],
 }, { timestamps: true });
 
 const User = mongoose.model('User', userSchema);
 
-module.exports = User; 
+module.exports = User;

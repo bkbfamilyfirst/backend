@@ -73,13 +73,18 @@ const getDashboardSummary = async (req, res) => {
         // Placeholder for growth this month
         const growthThisMonth = '8.3%';
 
-        // Placeholder for Regional Distribution
-        const regionalDistribution = {
-            north: 2847,
-            south: 3456,
-            east: 2134,
-            west: 1508
-        };
+        // Dynamic Regional Distribution
+        const regionalDistributionAgg = await User.aggregate([
+            { $match: { role: 'retailer', createdBy: dbUserId, status: 'active' } },
+            { $group: { _id: '$location', count: { $sum: 1 } } }
+        ]);
+
+        const regionalDistribution = regionalDistributionAgg.reduce((acc, curr) => {
+            // Handle null/undefined location values
+            const location = curr._id ? curr._id.toLowerCase() : 'unknown';
+            acc[location] = curr.count;
+            return acc;
+        }, { north: 0, south: 0, east: 0, west: 0, unknown: 0 }); // Added 'unknown' for null/undefined locations
 
         // Daily Activations (Roll-up View)
         const retailerIds = await User.find({ role: 'retailer', createdBy: dbUserId }).distinct('_id');
@@ -90,19 +95,79 @@ const getDashboardSummary = async (req, res) => {
             createdAt: { $gte: todayStart }
         });
 
-        // Placeholder for Avg Daily (Requires more complex calculations over time)
-        const avgDailyActivations = 0;
+        // Calculate Weekly Performance (Monday to Sunday)
+        const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const currentDay = now.getDay(); // 0 for Sunday, 1 for Monday, ..., 6 for Saturday
+        const diffToMonday = currentDay === 0 ? 6 : currentDay - 1; // Days to subtract to get to last Monday
+        const thisMonday = new Date(now);
+        thisMonday.setDate(now.getDate() - diffToMonday);
+        thisMonday.setHours(0, 0, 0, 0);
 
-        // Placeholder for Weekly Performance (Requires daily aggregation for Mon-Sun)
-        const weeklyPerformance = [
-            { day: 'Mon', activations: 0, percentage: 0 },
-            { day: 'Tue', activations: 0, percentage: 0 },
-            { day: 'Wed', activations: 0, percentage: 0 },
-            { day: 'Thu', activations: 0, percentage: 0 },
-            { day: 'Fri', activations: 0, percentage: 0 },
-            { day: 'Sat', activations: 0, percentage: 0 },
-            { day: 'Sun', activations: 0, percentage: 0 }
-        ];
+        const weeklyActivationsRaw = await Parent.aggregate([
+            { $match: {
+                createdBy: { $in: retailerIds },
+                createdAt: { $gte: thisMonday, $lte: now } // Only count up to 'now' for the current day
+            }},
+            { $group: {
+                _id: { $dayOfWeek: '$createdAt' }, // 1 for Sunday, 2 for Monday
+                count: { $sum: 1 }
+            }},
+            { $project: {
+                _id: 0,
+                dayOfWeek: { $subtract: ['$_id', 1] }, // Adjust to 0 for Sunday, 1 for Monday
+                count: 1
+            }}
+        ]);
+
+        const weeklyActivationsMap = new Map();
+        weeklyActivationsRaw.forEach(entry => {
+            // Adjust dayOfWeek to match JavaScript's getDay() (0 for Sunday, 1 for Monday)
+            const jsDayOfWeek = entry.dayOfWeek === 0 ? 6 : entry.dayOfWeek - 1; // Sunday is 0 in JS, so map 1 (Mon) to 1, ..., 7 (Sun) to 0
+             weeklyActivationsMap.set(jsDayOfWeek, entry.count);
+        });
+        
+        const dailyTargets = {
+            Mon: 1500, Tue: 1800, Wed: 1600, Thu: 1900, Fri: 2200, Sat: 1700, Sun: 1300 // Example targets, adjust as needed
+        };
+
+        const weeklyPerformance = daysOfWeek.map((dayName, index) => {
+            const activations = weeklyActivationsMap.get(index) || 0;
+            const target = dailyTargets[dayName] || 0;
+            const percentage = target > 0 ? parseFloat(((activations / target) * 100).toFixed(1)) : 0;
+            return { day: dayName, activations, percentage };
+        });
+
+        // Calculate Avg Daily Activations over the last 7 days
+        const sevenDaysAgoStart = new Date(now);
+        sevenDaysAgoStart.setDate(now.getDate() - 7);
+        sevenDaysAgoStart.setHours(0, 0, 0, 0);
+
+        const lastSevenDaysActivationsAgg = await Parent.aggregate([
+            { $match: {
+                createdBy: { $in: retailerIds },
+                createdAt: { $gte: sevenDaysAgoStart, $lte: now }
+            }},
+            { $group: {
+                _id: null,
+                totalActivations: { $sum: 1 }
+            }}
+        ]);
+
+        const totalActivationsLastSevenDays = lastSevenDaysActivationsAgg[0]?.totalActivations || 0;
+        const avgDailyActivations = totalActivationsLastSevenDays > 0 ? parseFloat((totalActivationsLastSevenDays / 7).toFixed(1)) : 0;
+
+        // This Week Summary (for the main card)
+        const thisWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - currentDay + (currentDay === 0 ? -6 : 1)); // Monday of current week
+        thisWeekStart.setHours(0, 0, 0, 0);
+
+        const activationsThisWeek = await Parent.countDocuments({
+            createdBy: { $in: retailerIds },
+            createdAt: { $gte: thisWeekStart }
+        });
+
+        const targetThisWeek = 10000; // As per screenshot
+        const thisWeekPercentage = targetThisWeek > 0 ? parseFloat(((activationsThisWeek / targetThisWeek) * 100).toFixed(1)) : 0;
+        const thisWeekRemaining = targetThisWeek - activationsThisWeek;
 
 
         res.status(200).json({
@@ -126,6 +191,12 @@ const getDashboardSummary = async (req, res) => {
                 today: dailyActivationsToday,
                 avgDaily: avgDailyActivations,
                 weeklyPerformance: weeklyPerformance,
+                thisWeekSummary: {
+                    count: activationsThisWeek,
+                    target: targetThisWeek,
+                    percentage: thisWeekPercentage,
+                    remaining: thisWeekRemaining
+                }
             }
         });
 
@@ -139,25 +210,24 @@ const getDashboardSummary = async (req, res) => {
 const getActivationSummaryAndTopRetailers = async (req, res) => {
     try {
         const dbUserId = req.user._id;
+
+        // Get all retailers created by this DB
         const retailerIds = await User.find({ role: 'retailer', createdBy: dbUserId }).distinct('_id');
 
+        // Date calculations
         const now = new Date();
-        const todayStart = new Date(now.setHours(0, 0, 0, 0));
-
-        // Get start of the current week (Monday)
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
         const currentDay = now.getDay(); // 0 for Sunday, 1 for Monday, ..., 6 for Saturday
-        const diffToMonday = now.getDate() - currentDay + (currentDay === 0 ? -6 : 1); // Adjust for Sunday
-        const thisWeekStart = new Date(now.setDate(diffToMonday));
+        const thisWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - currentDay + (currentDay === 0 ? -6 : 1)); // Monday of current week
         thisWeekStart.setHours(0, 0, 0, 0);
-
-        // Get start of the current month
+        
         const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        thisMonthStart.setHours(0, 0, 0, 0);
 
-        // Targets from screenshot - hardcoded for now
-        const targetToday = 1500;
-        const targetThisWeek = 10000;
-        const targetThisMonth = 40000;
+        // Targets (these can be made configurable)
+        const targetToday = 500;
+        const thisWeekTarget = 3500;
+        const targetThisMonth = 15000;
 
         // Activations Today
         const activationsToday = await Parent.countDocuments({
@@ -165,11 +235,17 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
             createdAt: { $gte: todayStart }
         });
 
+        const todayPercentage = targetToday > 0 ? ((activationsToday / targetToday) * 100).toFixed(1) : 0;
+        const todayRemaining = targetToday - activationsToday;
+
         // Activations This Week
         const activationsThisWeek = await Parent.countDocuments({
             createdBy: { $in: retailerIds },
             createdAt: { $gte: thisWeekStart }
         });
+
+        const thisWeekPercentage = thisWeekTarget > 0 ? ((activationsThisWeek / thisWeekTarget) * 100).toFixed(1) : 0;
+        const thisWeekRemaining = thisWeekTarget - activationsThisWeek;
 
         // Activations This Month
         const activationsThisMonth = await Parent.countDocuments({
@@ -177,18 +253,35 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
             createdAt: { $gte: thisMonthStart }
         });
 
-        // Calculate percentages and remaining
-        const todayPercentage = targetToday > 0 ? ((activationsToday / targetToday) * 100).toFixed(1) : 0;
-        const todayRemaining = targetToday - activationsToday;
-
-        const thisWeekPercentage = targetThisWeek > 0 ? ((activationsThisWeek / targetThisWeek) * 100).toFixed(1) : 0;
-        const thisWeekRemaining = targetThisWeek - activationsThisWeek;
-
         const thisMonthPercentage = targetThisMonth > 0 ? ((activationsThisMonth / targetThisMonth) * 100).toFixed(1) : 0;
         const thisMonthRemaining = targetThisMonth - activationsThisMonth;
 
-        // Top Performing Retailers - Placeholder, needs aggregation based on activations
-        const topPerformingRetailers = []; // This will be complex aggregation, keeping as placeholder for now
+        // Top Performing Retailers - Needs aggregation based on activations
+        const topPerformingRetailers = await Parent.aggregate([
+            { $match: { createdBy: { $in: retailerIds } } }, // Match parents created by these retailers
+            { $group: {
+                _id: '$createdBy', // Group by retailer ID
+                totalActivations: { $sum: 1 } // Count activations for each retailer
+            }},
+            { $lookup: {
+                from: 'users', // The collection to join with
+                localField: '_id',
+                foreignField: '_id',
+                as: 'retailerInfo'
+            }},
+            { $unwind: '$retailerInfo' }, // Deconstruct the array to get single object
+            { $project: {
+                _id: 0,
+                id: '$retailerInfo._id',
+                name: '$retailerInfo.name',
+                activations: '$totalActivations',
+                // Calculate performance (example: a simple ratio or percentage relative to a target/total)
+                // For now, let's assume a simple performance metric, e.g., activations / a fixed target, scaled.
+                performance: { $multiply: [{ $divide: ['$totalActivations', 100] }, 100] } // Example: 100 activations = 100% (adjust logic as needed)
+            }},
+            { $sort: { activations: -1 } }, // Sort by activations in descending order
+            { $limit: 3 } // Get top 3
+        ]);
 
         res.status(200).json({
             activationSummary: {
@@ -200,7 +293,7 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
                 },
                 thisWeek: {
                     count: activationsThisWeek,
-                    target: targetThisWeek,
+                    target: thisWeekTarget,
                     percentage: parseFloat(thisWeekPercentage),
                     remaining: thisWeekRemaining
                 },
@@ -223,8 +316,42 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
 // GET /db/retailers (Retailer Overview/Directory)
 const getRetailerList = async (req, res) => {
     try {
-        const retailers = await User.find({ role: 'retailer', createdBy: req.user._id }).select('name email phone role assignedKeys usedKeys createdBy location status');
-        res.status(200).json(retailers);
+        const dbUserId = req.user._id;
+
+        // Use aggregation to ensure all fields are included and get activations in one query
+        const retailersWithActivations = await User.aggregate([
+            { $match: { role: 'retailer', createdBy: dbUserId } },
+            {
+                $lookup: {
+                    from: 'parents',
+                    localField: '_id',
+                    foreignField: 'createdBy',
+                    as: 'parentActivations'
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    name: 1,
+                    email: 1,
+                    phone: 1,
+                    role: 1,
+                    assignedKeys: { $ifNull: ['$assignedKeys', 0] },
+                    usedKeys: { $ifNull: ['$usedKeys', 0] },
+                    createdBy: 1,
+                    location: { $ifNull: ['$location', { $ifNull: ['$address', null] }] },
+                    status: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    activations: { $size: '$parentActivations' }
+                }
+            }
+        ]);
+        
+        res.status(200).json({
+            message: 'Retailers fetched successfully.',
+            retailers: retailersWithActivations
+        });
     } catch (error) {
         console.error('Error getting Retailer list for DB:', error);
         res.status(500).json({ message: 'Server error during Retailer list retrieval.' });
@@ -1074,4 +1201,4 @@ module.exports = {
     getMovementHistory,
     receiveKeysFromSs,
     distributeKeysToRetailers,
-}; 
+};

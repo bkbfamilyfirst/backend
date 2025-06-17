@@ -10,7 +10,7 @@ router.get('/dashboard/summary', authenticateToken, authorizeRole(['db']), dbCon
 router.get('/dashboard/key-stats', authenticateToken, authorizeRole(['db']), dbController.getDbKeyDistributionStats);
 
 // Activation Summary and Top Performing Retailers
-router.get('/dashboard/retailer-performance', authenticateToken, authorizeRole(['db']), dbController.getActivationSummaryAndTopRetailers);
+router.get('/dashboard/activation-summary', authenticateToken, authorizeRole(['db']), dbController.getActivationSummaryAndTopRetailers);
 
 // Get Retailer List (Overview/Directory)
 router.get('/retailers', authenticateToken, authorizeRole(['db']), dbController.getRetailerList);

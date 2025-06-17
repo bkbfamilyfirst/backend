@@ -3,7 +3,7 @@ const app = require('./app');
 const mongoose = require('mongoose');
 
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = 'mongodb+srv://ahmad:Ahmad1&1@cluster0.p1srjq7.mongodb.net/';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://ahmad:Ahmad1&1@cluster0.p1srjq7.mongodb.net/';
 
 mongoose.connect(MONGO_URI)
     .then(() => {

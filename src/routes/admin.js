@@ -57,4 +57,13 @@ router.patch('/nd/block/:ndId', authenticateToken, authorizeRole(['admin']), adm
 // DELETE /admin/nd/:ndId - Delete ND
 router.delete('/nd/:ndId', authenticateToken, authorizeRole(['admin']), adminController.deleteNd);
 
+// GET /admin/profile
+router.get('/profile', authenticateToken, authorizeRole(['admin']), adminController.getAdminProfile);
+
+// PATCH /admin/profile
+router.patch('/profile', authenticateToken, authorizeRole(['admin']), adminController.editAdminProfile);
+
+// PATCH /admin/change-password
+router.patch('/change-password', authenticateToken, authorizeRole(['admin']), adminController.changePassword);
+
 module.exports = router; 
