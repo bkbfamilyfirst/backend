@@ -48,8 +48,6 @@ const userSchema = new mongoose.Schema({
     address: { // NEW FIELD: To directly match frontend's 'address' input (replaces 'location' if that was intended for full address)
         type: String,
     },
-    // If 'location' was intended for a different, less specific purpose (e.g., city/state), you can keep it as well.
-    // Otherwise, 'address' will be used for the full address.
 
     status: {
         type: String,

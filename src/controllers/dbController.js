@@ -76,15 +76,15 @@ const getDashboardSummary = async (req, res) => {
         // Dynamic Regional Distribution
         const regionalDistributionAgg = await User.aggregate([
             { $match: { role: 'retailer', createdBy: dbUserId, status: 'active' } },
-            { $group: { _id: '$location', count: { $sum: 1 } } }
+            { $group: { _id: '$address', count: { $sum: 1 } } }
         ]);
 
         const regionalDistribution = regionalDistributionAgg.reduce((acc, curr) => {
-            // Handle null/undefined location values
+            // Handle null/undefined address values
             const location = curr._id ? curr._id.toLowerCase() : 'unknown';
             acc[location] = curr.count;
             return acc;
-        }, { north: 0, south: 0, east: 0, west: 0, unknown: 0 }); // Added 'unknown' for null/undefined locations
+        }, { north: 0, south: 0, east: 0, west: 0, unknown: 0 }); // Added 'unknown' for null/undefined addresses
 
         // Daily Activations (Roll-up View)
         const retailerIds = await User.find({ role: 'retailer', createdBy: dbUserId }).distinct('_id');
@@ -339,7 +339,7 @@ const getRetailerList = async (req, res) => {
                     assignedKeys: { $ifNull: ['$assignedKeys', 0] },
                     usedKeys: { $ifNull: ['$usedKeys', 0] },
                     createdBy: 1,
-                    location: { $ifNull: ['$location', { $ifNull: ['$address', null] }] },
+                    address: { $ifNull: ['$address', null] },
                     status: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -361,11 +361,11 @@ const getRetailerList = async (req, res) => {
 // POST /db/retailers (Add Retailer)
 const addRetailer = async (req, res) => {
     try {
-        const { name, email, phone, location, status, assignedKeys } = req.body;
+        const { name, email, phone, address, status, assignedKeys } = req.body;
         const dbUserId = req.user._id;
 
-        if (!name || !email || !phone || !location) {
-            return res.status(400).json({ message: 'Please provide name, email, phone, and region.' });
+        if (!name || !email || !phone || !address) {
+            return res.status(400).json({ message: 'Please provide name, email, phone, and address.' });
         }
 
         const existingUser = await User.findOne({ email });
@@ -398,7 +398,7 @@ const addRetailer = async (req, res) => {
             password: hashedPassword,
             role: 'retailer',
             createdBy: dbUserId,
-            location,
+            address,
             status: status || 'active',
             assignedKeys: keysToAssign,
             usedKeys: 0,
@@ -607,7 +607,7 @@ const getDbProfile = async (req, res) => {
                 lastName: dbUser.name ? dbUser.name.split(' ').slice(1).join(' ') : '',
                 email: dbUser.email,
                 phone: dbUser.phone,
-                address: dbUser.location,
+                address: dbUser.address,
                 bio: dbUser.bio || '',
             },
             profileStats: {
@@ -663,12 +663,6 @@ const updateDbProfile = async (req, res) => {
             delete updates.lastName;
         }
 
-        // Map address to location field
-        if (updates.address !== undefined) {
-            updates.location = updates.address;
-            delete updates.address;
-        }
-
         const updatedDbProfile = await User.findByIdAndUpdate(dbUserId, { $set: updates }, { new: true, runValidators: true }).select('-password');
 
         if (!updatedDbProfile) {
@@ -682,7 +676,7 @@ const updateDbProfile = async (req, res) => {
                 lastName: updatedDbProfile.name ? updatedDbProfile.name.split(' ').slice(1).join(' ') : '',
                 email: updatedDbProfile.email,
                 phone: updatedDbProfile.phone,
-                address: updatedDbProfile.location,
+                address: updatedDbProfile.address,
                 bio: updatedDbProfile.bio || '',
             }
         });
@@ -862,7 +856,7 @@ const getDistributionHistory = async (req, res) => {
             .sort({ date: -1 })
             .skip(skip)
             .limit(parseInt(limit))
-            .populate('toUser', 'name email location'); // Populate toUser for retailer name and region
+            .populate('toUser', 'name email address'); // Populate toUser for retailer name and region
 
         const totalHistory = await KeyTransferLog.countDocuments(filter);
 
@@ -875,7 +869,7 @@ const getDistributionHistory = async (req, res) => {
             },
             quantity: entry.count,
             batch: entry.notes || `DB-Batch-${entry._id.toString().slice(-5).toUpperCase()}`, // Placeholder for batch, maybe use reference
-            region: entry.toUser.location,
+            region: entry.toUser.address,
             date: entry.date,
             status: entry.status,
             // Actions: Client-side logic for 'Confirm', 'Mark Delivered', 'Mark Sent' based on status
@@ -1072,22 +1066,25 @@ const handleDistributionHistoryAction = async (req, res) => {
 // POST /db/receive-keys-from-ss
 const receiveKeysFromSs = async (req, res) => {
     try {
-        const { batchNumber, quantity, ssReference, notes, fromSsId } = req.body;
+        const { batchNumber, quantity, ssReference, notes } = req.body; // Remove fromSsId from destructuring
         const dbUserId = req.user._id;
 
-        if (!batchNumber || !quantity || quantity <= 0 || !fromSsId) {
-            return res.status(400).json({ message: 'Please provide batchNumber, quantity, and fromSsId.' });
-        }
-
-        // Optional: Verify fromSsId is a valid SS user
-        const ssUser = await User.findById(fromSsId);
-        if (!ssUser || ssUser.role !== 'ss') {
-            return res.status(400).json({ message: 'Invalid or unauthorized SS user ID.' });
+        if (!batchNumber || !quantity || quantity <= 0) {
+            return res.status(400).json({ message: 'Please provide batchNumber and quantity.' });
         }
 
         const dbUser = await User.findById(dbUserId);
         if (!dbUser) {
             return res.status(404).json({ message: 'Distributor user not found.' });
+        }
+
+        // Get the SS ID from the DB user's createdBy field
+        const fromSsId = dbUser.createdBy;
+        
+        // Optional: Verify the SS user exists and is valid
+        const ssUser = await User.findById(fromSsId);
+        if (!ssUser || ssUser.role !== 'ss') {
+            return res.status(400).json({ message: 'Invalid or unauthorized SS user.' });
         }
 
         // Update DB's assigned keys (total received)
@@ -1098,7 +1095,7 @@ const receiveKeysFromSs = async (req, res) => {
             fromUser: fromSsId,
             toUser: dbUserId,
             count: quantity,
-            status: 'received', // Initial status when DB receives keys
+            status: 'received',
             type: 'receive',
             notes: notes || `Received batch ${batchNumber} from SS: ${ssUser.name}`,
             reference: ssReference,
