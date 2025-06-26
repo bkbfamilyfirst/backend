@@ -17,30 +17,45 @@ console.log('🌐 CORS Configuration:');
 console.log('Environment:', process.env.NODE_ENV);
 console.log('Allowed Origins:', allowedOrigins);
 
-const corsOptions = {
-    origin: function (origin, callback) {
-        console.log('🔍 CORS Check - Request Origin:', origin);
-        console.log('🔍 Allowed Origins:', allowedOrigins);
-        
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) {
-            console.log('✅ No origin header - allowing request');
-            return callback(null, true);
-        }
-        
-        if (allowedOrigins.indexOf(origin) !== -1) {
-            console.log('✅ Origin allowed:', origin);
-            callback(null, true);
-        } else {
-            console.log('❌ Origin blocked:', origin);
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
-    maxAge: 86400 // 24 hours
-};
+let corsOptions;
+
+// If wildcard is set, use simple CORS config
+if (allowedOrigins.includes('*')) {
+    console.log('🌐 Using wildcard CORS - allowing all origins');
+    corsOptions = {
+        origin: true, // Allow all origins
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        credentials: true,
+        maxAge: 86400 // 24 hours
+    };
+} else {
+    corsOptions = {
+        origin: function (origin, callback) {
+            console.log('🔍 CORS Check - Request Origin:', origin);
+            console.log('🔍 Allowed Origins:', allowedOrigins);
+            
+            // Allow requests with no origin (like mobile apps or curl requests)
+            if (!origin) {
+                console.log('✅ No origin header - allowing request');
+                return callback(null, true);
+            }
+            
+            if (allowedOrigins.indexOf(origin) !== -1) {
+                console.log('✅ Origin allowed:', origin);
+                callback(null, true);
+            } else {
+                console.log('❌ Origin blocked:', origin);
+                console.log('❌ Available origins:', allowedOrigins);
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        credentials: true,
+        maxAge: 86400 // 24 hours
+    };
+}
 
 // Middleware
 app.use(cors(corsOptions));
