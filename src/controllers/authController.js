@@ -14,36 +14,90 @@ const generateRefreshToken = (user) => {
 
 // POST /auth/login
 exports.login = async (req, res) => {
+    console.log('⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯');
+    console.log('Login attempt:', new Date().toISOString());
+    console.log('Request body:', JSON.stringify(req.body));
+    console.log('Request headers:', JSON.stringify(req.headers));
+    
     const { email, password } = req.body;
+    console.log(`Email provided: ${email || 'none'}`);
+    console.log(`Password provided: ${password ? '******' : 'none'}`);
 
     if (!email || !password) {
+        console.log('Error: Missing email or password');
         return res.status(400).json({ message: 'Please enter email and password.' });
     }
 
     try {
+        console.log(`Looking for user with email: ${email}`);
         const user = await User.findOne({ email });
+        
         if (!user) {
+            console.log(`User with email ${email} not found in database`);
             return res.status(401).json({ message: 'Invalid credentials.' });
         }
-
+        
+        console.log(`User found: ${user._id}, role: ${user.role}`);
+        
+        console.log('Comparing passwords...');
         const isMatch = await bcrypt.compare(password, user.password);
+        
         if (!isMatch) {
+            console.log('Password comparison failed');
             return res.status(401).json({ message: 'Invalid credentials.' });
         }
-
+        
+        console.log('Password verified successfully');
+        
+        console.log('Generating tokens...');
         const accessToken = generateAccessToken(user);
         const refreshToken = generateRefreshToken(user);
+        
+        console.log('Access token generated');
+        console.log('Refresh token generated');
 
         // Store hashed refresh token in DB
+        console.log('Hashing refresh token...');
         const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+        console.log('Hash completed, storing in user document...');
+        
+        console.log(`Current refresh tokens count: ${user.refreshTokens ? user.refreshTokens.length : 0}`);
         user.refreshTokens.push(hashedRefreshToken);
+        
+        console.log('Saving user with new refresh token...');
         await user.save();
+        console.log('User saved successfully');
 
-        res.cookie('refreshToken', refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 7 * 24 * 60 * 60 * 1000 }); // 7 days
-        res.status(200).json({ message: 'Logged in successfully.', accessToken, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+        console.log('Setting refresh token cookie...');
+        res.cookie('refreshToken', refreshToken, { 
+            httpOnly: true, 
+            secure: process.env.NODE_ENV === 'production', 
+            sameSite: 'strict', 
+            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+        });
+        
+        console.log('Cookie set, sending response...');
+        const response = { 
+            message: 'Logged in successfully.', 
+            accessToken, 
+            user: { 
+                id: user._id, 
+                name: user.name, 
+                email: user.email, 
+                role: user.role 
+            } 
+        };
+        console.log('Response payload:', JSON.stringify(response, null, 2).replace(accessToken, '[TOKEN_HIDDEN]'));
+        
+        res.status(200).json(response);
+        console.log('Login successful for user:', user._id);
+        console.log('⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯');
 
     } catch (error) {
-        console.error('Login error:', error);
+        console.error('⚠️ Login error:', error);
+        console.error('Error stack:', error.stack);
+        console.error('Error occurred at:', new Date().toISOString());
+        console.log('⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯');
         res.status(500).json({ message: 'Server error during login.' });
     }
 };
@@ -184,4 +238,4 @@ exports.logout = async (req, res) => {
         console.error('Logout error:', error);
         res.status(500).json({ message: 'Server error during logout.' });
     }
-}; 
+};
