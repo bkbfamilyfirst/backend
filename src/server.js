@@ -15,4 +15,7 @@ mongoose.connect(MONGO_URI)
     .catch(err => {
         console.error('MongoDB connection error:', err);
         process.exit(1); // Exit process with failure
-    }); 
+    });
+
+// Add this line - Export the app for serverless environments
+module.exports = app;
