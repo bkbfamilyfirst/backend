@@ -254,7 +254,7 @@ const addDistributor = async (req, res) => {
             password: hashedPassword,
             role: 'db',
             createdBy: ssUserId,
-            location,
+            address: location, // Map frontend 'location' to backend 'address' field
             status: status || 'active',
             assignedKeys: keysToAssign,
             usedKeys: 0,
@@ -267,6 +267,8 @@ const addDistributor = async (req, res) => {
 
         const responseDistributor = newDistributor.toObject();
         delete responseDistributor.password;
+        // Map backend 'address' to frontend 'location' for consistency
+        responseDistributor.location = newDistributor.address || "Not specified";
 
         res.status(201).json({ message: 'Distributor added successfully.', distributor: responseDistributor, defaultPassword: defaultPassword });
 
@@ -288,6 +290,12 @@ const updateDistributor = async (req, res) => {
             return res.status(404).json({ message: 'Distributor not found or not authorized to update.' });
         }
 
+        // Map frontend 'location' to backend 'address' field if present
+        if (updates.location) {
+            updates.address = updates.location;
+            delete updates.location;
+        }
+
         delete updates.role;
         delete updates.password;
         delete updates.assignedKeys;
@@ -297,7 +305,11 @@ const updateDistributor = async (req, res) => {
 
         const updatedDistributor = await User.findByIdAndUpdate(id, { $set: updates }, { new: true, runValidators: true }).select('-password');
 
-        res.status(200).json(updatedDistributor);
+        // Map backend 'address' to frontend 'location' for consistency
+        const responseDistributor = updatedDistributor.toObject();
+        responseDistributor.location = updatedDistributor.address || "Not specified";
+
+        res.status(200).json(responseDistributor);
     } catch (error) {
         console.error('Error updating Distributor for SS:', error);
         res.status(500).json({ message: 'Server error during Distributor update.' });
@@ -381,7 +393,12 @@ const getSsProfile = async (req, res) => {
         if (!ssProfile) {
             return res.status(404).json({ message: 'State Supervisor profile not found.' });
         }
-        res.status(200).json(ssProfile);
+
+        // Map backend 'address' to frontend 'location' for consistency
+        const responseProfile = ssProfile.toObject();
+        responseProfile.location = ssProfile.address || "Not specified";
+
+        res.status(200).json(responseProfile);
     } catch (error) {
         console.error('Error fetching SS profile:', error);
         res.status(500).json({ message: 'Server error during SS profile retrieval.' });
@@ -393,6 +410,12 @@ const updateSsProfile = async (req, res) => {
     try {
         const updates = req.body;
         const ssUserId = req.user._id;
+
+        // Map frontend 'location' to backend 'address' field if present
+        if (updates.location) {
+            updates.address = updates.location;
+            delete updates.location;
+        }
 
         delete updates.role;
         delete updates.password;
@@ -407,7 +430,11 @@ const updateSsProfile = async (req, res) => {
             return res.status(404).json({ message: 'State Supervisor profile not found.' });
         }
 
-        res.status(200).json(updatedSsProfile);
+        // Map backend 'address' to frontend 'location' for consistency
+        const responseProfile = updatedSsProfile.toObject();
+        responseProfile.location = updatedSsProfile.address || "Not specified";
+
+        res.status(200).json(responseProfile);
     } catch (error) {
         console.error('Error updating SS profile:', error);
         res.status(500).json({ message: 'Server error during SS profile update.' });
