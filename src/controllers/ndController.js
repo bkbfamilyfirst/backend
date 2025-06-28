@@ -13,7 +13,7 @@ const getSsList = async (req, res) => {
             name: ss.name,
             email: ss.email,
             phone: ss.phone,
-            location: ss.address || ss.location, // Use address or location field
+            address: ss.address, // Use address field consistently
             status: ss.status,
             assignedKeys: ss.assignedKeys || 0,
             usedKeys: ss.usedKeys || 0,
@@ -393,12 +393,12 @@ const updateNdProfile = async (req, res) => {
 // POST /nd/ss
 const addSs = async (req, res) => {
     try {
-        const { name, email, phone, location, status, assignedKeys } = req.body;
+        const { name, email, phone, address, status, assignedKeys } = req.body;
         const ndUserId = req.user._id;
 
         // Basic validation
-        if (!name || !email || !phone || !location) {
-            return res.status(400).json({ message: 'Please provide name, email, phone, and region.' });
+        if (!name || !email || !phone || !address) {
+            return res.status(400).json({ message: 'Please provide name, email, phone, and address.' });
         }
 
         // Check if email already exists
@@ -433,7 +433,7 @@ const addSs = async (req, res) => {
             password: hashedPassword,
             role: 'ss',
             createdBy: ndUserId,
-            location,
+            address,
             status: status || 'active',
             assignedKeys: keysToAssign,
             usedKeys: 0,
