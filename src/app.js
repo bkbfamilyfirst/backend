@@ -8,6 +8,8 @@ const parentRoutes = require('./routes/parent');
 const ndRoutes = require('./routes/nd');
 const ssRoutes = require('./routes/ss')
 const dbRoutes = require('./routes/db')
+const keyRoutes = require('./routes/key'); // Existing key routes
+const childRoutes = require('./routes/child'); // New child routes
 const app = express();
 
 // CORS configuration with debugging
@@ -61,6 +63,19 @@ if (allowedOrigins.includes('*')) {
 app.use(cors(corsOptions));
 app.use(bodyParser.json()); // for parsing application/json
 
+// Add detailed request logging
+app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    console.log(`🚀 ${timestamp} - ${req.method} ${req.originalUrl}`);
+    
+    // Log frequent endpoints specifically
+    if (req.originalUrl.includes('/nd/')) {
+        console.log(`📊 ND Endpoint Hit: ${req.originalUrl}`);
+    }
+    
+    next();
+});
+
 // Routes
 app.use('/auth', authRoutes);
 app.use('/hierarchy', hierarchyRoutes);
@@ -69,10 +84,12 @@ app.use('/parent', parentRoutes);
 app.use('/nd', ndRoutes);
 app.use('/ss', ssRoutes);
 app.use('/db', dbRoutes);
+app.use('/key', keyRoutes); // Existing key routes
+app.use('/child', childRoutes); // New child routes
 
 // Basic route for testing
 app.get('/', (req, res) => {
     res.send('Family First API is running!');
 });
 
-module.exports = app; 
+module.exports = app;

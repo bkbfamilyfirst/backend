@@ -24,9 +24,10 @@ const keySchema = new mongoose.Schema({
     },
     validUntil: {
         type: Date,
+        required: true,
     },
 }, { timestamps: true });
 
 const Key = mongoose.model('Key', keySchema);
 
-module.exports = Key; 
+module.exports = Key;
