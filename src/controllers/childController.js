@@ -1,5 +1,5 @@
 const Child = require('../models/Child');
-const User = require('../models/User'); // Assuming Parent is a User with role 'parent'
+const User = require('../models/User'); // Parent is now User with role 'parent'
 
 // POST /child/create
 exports.addChild = async (req, res) => {

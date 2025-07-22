@@ -12,7 +12,7 @@ const keySchema = new mongoose.Schema({
     },
     assignedTo: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Parent', // Reference to the Parent model
+        ref: 'User', // Reference to the User model (parent role)
     },
     generatedBy: {
         type: mongoose.Schema.Types.ObjectId,

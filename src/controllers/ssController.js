@@ -1,6 +1,5 @@
 const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
-const Parent = require('../models/Parent');
 const bcrypt = require('bcrypt');
 
 // GET /ss/dashboard/summary

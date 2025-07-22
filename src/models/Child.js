@@ -15,7 +15,7 @@ const childSchema = new mongoose.Schema({
     },
     parentId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        ref: 'User', // Parent is now User with role 'parent'
         required: true
     }
 }, { timestamps: true });

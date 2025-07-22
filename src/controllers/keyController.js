@@ -1,5 +1,5 @@
 const Key = require('../models/Key');
-const User = require('../models/User'); // Assuming Parent is a User with role 'parent'
+const User = require('../models/User'); // Parent is now User with role 'parent'
 
 // GET /key/info
 exports.getKeyInfo = async (req, res) => {

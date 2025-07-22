@@ -1,5 +1,5 @@
 const Device = require('../models/Device');
-const Parent = require('../models/Parent');
+const User = require('../models/User');
 const Key = require('../models/Key');
 
 // Helper to find device and verify ownership (for parent-related actions)
@@ -8,10 +8,8 @@ const findDeviceAndVerifyParent = async (deviceId, parentId) => {
     if (!device) {
         return { status: 404, message: 'Device not found.' };
     }
-
-    // Find the parent associated with this device's IMEI
-    const parentProfile = await Parent.findOne({ deviceImei: device.imei });
-
+    // Find the parent (User with role 'parent') associated with this device's IMEI
+    const parentProfile = await User.findOne({ deviceImei: device.imei, role: 'parent' });
     if (!parentProfile || parentProfile._id.toString() !== parentId.toString()) {
         return { status: 403, message: 'Access denied: Device does not belong to this parent.' };
     }

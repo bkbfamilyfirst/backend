@@ -1,6 +1,5 @@
 const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
-const Parent = require('../models/Parent');
 const { generateCsv } = require('../utils/csv');
 const bcrypt = require('bcrypt');
 

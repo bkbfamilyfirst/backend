@@ -1,6 +1,5 @@
 const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
-const Parent = require('../models/Parent'); // Assuming Parent model might be used for activations
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 

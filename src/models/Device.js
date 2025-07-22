@@ -8,7 +8,7 @@ const deviceSchema = new mongoose.Schema({
     },
     parent: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Parent',
+        ref: 'User', // Now references User with role 'parent'
         required: true,
     },
     isLocked: {
