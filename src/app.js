@@ -10,6 +10,7 @@ const ssRoutes = require('./routes/ss')
 const dbRoutes = require('./routes/db')
 const keyRoutes = require('./routes/key'); // Existing key routes
 const childRoutes = require('./routes/child'); // New child routes
+const retailerRoutes = require('./routes/retailer'); // New retailer routes
 const app = express();
 
 // CORS configuration with debugging
@@ -86,6 +87,7 @@ app.use('/ss', ssRoutes);
 app.use('/db', dbRoutes);
 app.use('/key', keyRoutes); // Existing key routes
 app.use('/child', childRoutes); // New child routes
+app.use('/retailer', retailerRoutes); // New retailer routes
 
 // Basic route for testing
 app.get('/', (req, res) => {
