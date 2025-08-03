@@ -3,12 +3,12 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 // Generate JWT Access Token
 const generateAccessToken = (user) => {
-    return jwt.sign({ id: user._id, role: user.role }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
+    return jwt.sign({ id: user._id, role: user.role }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '7d' });
 };
 
 // Generate JWT Refresh Token
 const generateRefreshToken = (user) => {
-    return jwt.sign({ id: user._id, role: user.role }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
+    return jwt.sign({ id: user._id, role: user.role }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: '30d' });
 };
 
 // POST /auth/login
