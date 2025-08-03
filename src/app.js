@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const authRoutes = require('./routes/auth');
 const hierarchyRoutes = require('./routes/hierarchy');
 const adminRoutes = require('./routes/admin');
@@ -63,6 +64,7 @@ if (allowedOrigins.includes('*')) {
 // Middleware
 app.use(cors(corsOptions));
 app.use(bodyParser.json()); // for parsing application/json
+app.use(cookieParser());
 
 // Add detailed request logging
 app.use((req, res, next) => {
