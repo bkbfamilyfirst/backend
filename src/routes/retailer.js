@@ -6,6 +6,8 @@ const retailerController = require('../controllers/retailerController');
 
 // GET /retailer/parent-list
 router.get('/parent-list', authenticateToken, authorizeRole(['retailer']), retailerController.listParents);
+router.get('/dashboard-summary', authenticateToken, authorizeRole(['retailer']), retailerController.getDashboardSummary);
+router.get('/reports', authenticateToken, authorizeRole(['retailer']), retailerController.getReports);
 // POST /retailer/create-parent
 router.post('/create-parent', authenticateToken, authorizeRole(['retailer']), retailerController.createParent);
 // GET /retailer/profile
