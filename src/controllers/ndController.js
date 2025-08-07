@@ -1,8 +1,8 @@
+const Key = require('../models/Key');
 const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
 const { generateCsv } = require('../utils/csv');
 const bcrypt = require('bcrypt');
-
 // GET /nd/ss-list
 const getSsList = async (req, res) => {
     try {
@@ -16,6 +16,7 @@ const getSsList = async (req, res) => {
             status: ss.status,
             assignedKeys: ss.assignedKeys || 0,
             usedKeys: ss.usedKeys || 0,
+            receivedKeys: ss.receivedKeys || 0,
             balance: (ss.assignedKeys || 0) - (ss.usedKeys || 0),
             createdAt: ss.createdAt,
             updatedAt: ss.updatedAt
@@ -41,7 +42,22 @@ const getSsStats = async (req, res) => {
             { $group: { _id: null, total: { $sum: '$assignedKeys' } } }
         ]);
         const totalKeys = keysAssignedAgg[0]?.total || 0;
-        res.status(200).json({ total, active, blocked, totalKeys });
+        // Fetch ND's transferredKeys property
+        const ndUser = await User.findById(req.user._id).select('transferredKeys');
+        // Aggregate receivedKeys for all SS users under this ND
+        const receivedKeysAgg = await User.aggregate([
+            { $match: { role: 'ss', createdBy: req.user._id } },
+            { $group: { _id: null, total: { $sum: '$receivedKeys' } } }
+        ]);
+        const totalReceivedKeys = receivedKeysAgg[0]?.total || 0;
+        res.status(200).json({
+            total,
+            active,
+            blocked,
+            totalKeys,
+            transferredKeys: ndUser?.transferredKeys || 0,
+            receivedKeys: totalReceivedKeys
+        });
     } catch (error) {
         console.error('Error getting SS stats for ND:', error);
         res.status(500).json({ message: 'Server error during SS stats retrieval.' });
@@ -232,7 +248,8 @@ const getReportsSummary = async (req, res) => {
         ]);
         const totalKeysTransferred = totalKeysTransferredSummary[0]?.total || 0;
 
-        const parentCount = await Parent.countDocuments({ createdBy: { $in: ssIds } });
+        // Count parents using User model with role 'parent'
+        const parentCount = await User.countDocuments({ role: 'parent', createdBy: { $in: ssIds } });
 
         res.status(200).json({
             totalReceivedKeys: ndAssignedKeys,
@@ -460,50 +477,49 @@ const addSs = async (req, res) => {
 const transferKeysToSs = async (req, res) => {
     try {
         const { ssId, keysToTransfer } = req.body;
-        const ndUserId = req.user._id;
-
-        // Basic validation
-        if (!ssId || !keysToTransfer) {
-            return res.status(400).json({ message: 'Please provide ssId and keysToTransfer.' });
+        if (!ssId || !keysToTransfer || keysToTransfer <= 0) {
+            return res.status(400).json({ message: 'Please provide a valid SS ID and a positive number of keys to transfer.' });
         }
-
-        const ss = await User.findOne({ _id: ssId, role: 'ss', createdBy: ndUserId });
-        if (!ss) {
-            return res.status(404).json({ message: 'State Supervisor not found or not authorized to transfer keys.' });
+        const ssUser = await User.findOne({ _id: ssId, role: 'ss', createdBy: req.user._id });
+        if (!ssUser) {
+            return res.status(404).json({ message: 'State Supervisor not found.' });
         }
-
-        const ndUser = await User.findById(ndUserId);
-        if (!ndUser) {
-            return res.status(404).json({ message: 'National Distributor user not found.' });
+        // Count available unassigned keys currently owned by ND
+        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
+        if (keysToTransfer > availableUnassignedKeysCount) {
+            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for this ND.` });
         }
-
-        const ndAssignedKeys = ndUser.assignedKeys || 0;
-        const ndUsedKeys = ndUser.usedKeys || 0;
-        const ndBalanceKeys = ndAssignedKeys - ndUsedKeys;
-        const keysToAssign = keysToTransfer || 0;
-
-        if (keysToAssign > ndBalanceKeys) {
-            return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. ND only has ${ndBalanceKeys} available keys.` });
-        }
-
-        // Update ND's usedKeys and SS's assignedKeys
-        ndUser.usedKeys += keysToAssign;
-        ss.assignedKeys += keysToAssign;
-        await ndUser.save();
-        await ss.save();
-
-        // Create a new KeyTransferLog entry
+        // Find and update a batch of unassigned keys owned by this ND
+        const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
+        const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
+        await Key.updateMany(
+            { _id: { $in: keyIdsToUpdate } },
+            { $set: { currentOwner: ssUser._id } }
+        );
+        // Update SS assignedKeys
+        ssUser.assignedKeys += keysToTransfer;
+        await ssUser.save();
+        // Increment transferredKeys for ND (sender)
+        await User.updateOne(
+            { _id: req.user._id },
+            { $inc: { transferredKeys: keysToTransfer } }
+        );
+        // Increment receivedKeys for SS (receiver)
+        await User.updateOne(
+            { _id: ssUser._id },
+            { $inc: { receivedKeys: keysToTransfer } }
+        );
+        // Create KeyTransferLog
         const newKeyTransferLog = new KeyTransferLog({
-            fromUser: ndUserId,
+            fromUser: req.user._id,
             toUser: ssId,
-            count: keysToAssign,
+            count: keysToTransfer,
             status: 'completed',
-            type: 'regular',
-            notes: `Transferred ${keysToAssign} keys from ND to SS`
+            type: 'bulk',
+            notes: `Bulk transferred ${keysToTransfer} keys from ND to SS: ${ssUser.name}`
         });
         await newKeyTransferLog.save();
-
-        res.status(200).json({ message: 'Keys transferred successfully.' });
+        res.status(200).json({ message: 'Keys transferred to State Supervisor successfully.' });
     } catch (error) {
         console.error('Error transferring keys to SS:', error);
         res.status(500).json({ message: 'Server error during key transfer.' });

@@ -1,5 +1,6 @@
 const Key = require('../models/Key');
 const User = require('../models/User');
+// const Parent = require('../models/Parent.js'); // Parent model removed. Use User model with role: 'parent'.
 const KeyTransferLog = require('../models/KeyTransferLog');
 const { generateCsv } = require('../utils/csv');
 const bcrypt = require('bcrypt');
@@ -18,10 +19,10 @@ const generateHexKey = (length) => {
 // Helper function to build hierarchy tree
 async function buildHierarchyTree(users, parents) {
     const userMap = new Map(users.map(u => [u._id.toString(), { ...u.toObject(), children: [] }]));
-    const parentMap = new Map(parents.map(p => [p._id.toString(), { ...p.toObject(), children: [] }]));
-
-    // Add parents to user map for easier lookup by their ID for linking
-    parents.forEach(p => userMap.set(p._id.toString(), { ...p.toObject(), children: [] }));
+    // Parents are now users with role 'parent'
+    const parentUsers = users.filter(u => u.role === 'parent');
+    // Add parents to user map for easier lookup by their ID for linking (redundant, but keeps logic similar)
+    parentUsers.forEach(p => userMap.set(p._id.toString(), { ...p.toObject(), children: [] }));
 
     const hierarchy = [];
 
@@ -35,9 +36,9 @@ async function buildHierarchyTree(users, parents) {
     }
 
     // Link parents to retailers
-    for (const parent of parents) {
+    for (const parent of parentUsers) {
         if (parent.createdBy && userMap.has(parent.createdBy.toString())) {
-            userMap.get(parent.createdBy.toString()).children.push(parentMap.get(parent._id.toString()));
+            userMap.get(parent.createdBy.toString()).children.push(userMap.get(parent._id.toString()));
         }
     }
 
@@ -71,12 +72,17 @@ exports.generateKeys = async (req, res) => {
             const newKey = new Key({
                 key: uniqueKey,
                 generatedBy: req.user._id,
+                currentOwner: req.user._id,
                 validUntil: new Date(new Date().setFullYear(new Date().getFullYear() + 2)), // 2 years from now
             });
             await newKey.save();
             generatedKeys.push(newKey);
         }
-
+        // Increment totalGenerated for admin
+        await User.updateOne(
+            { _id: req.user._id, role: 'admin' },
+            { $inc: { totalGenerated: count } }
+        );
         res.status(201).json({ message: `${count} keys generated successfully.`, keys: generatedKeys.map(k => k.key) });
     } catch (error) {
         console.error('Error generating keys:', error);
@@ -120,13 +126,15 @@ exports.getSummary = async (req, res) => {
         }
 
         // --- Total Activations section ---
-        const totalActivations = await Parent.countDocuments();
+        const totalActivations = await User.countDocuments({ role: 'parent' });
 
         // Expiring Soon (30 days)
         const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
         const expiringSoon = await Key.countDocuments({ validUntil: { $lte: in30Days, $gte: now }, isAssigned: true });
         const validActivations = await Key.countDocuments({ validUntil: { $gt: in30Days }, isAssigned: true });
 
+        // Get totalGenerated and transferredKeys for all admins
+        const adminUsers = await User.find({ role: 'admin' }).select('name email totalGenerated transferredKeys');
         res.status(200).json({
             ...userSummary,
             totalKeys: {
@@ -140,7 +148,14 @@ exports.getSummary = async (req, res) => {
                 expiringSoon: expiringSoon,
                 valid: validActivations,
                 expiring: expiringSoon // Assuming 'expiring' is the same as 'expiringSoon' from the screenshot
-            }
+            },
+            adminStats: adminUsers.map(a => ({
+                id: a._id,
+                name: a.name,
+                email: a.email,
+                totalGenerated: a.totalGenerated || 0,
+                transferredKeys: a.transferredKeys || 0
+            }))
         });
     } catch (error) {
         console.error('Error getting admin summary:', error);
@@ -152,9 +167,8 @@ exports.getSummary = async (req, res) => {
 exports.getUserHierarchy = async (req, res) => {
     try {
         const users = await User.find({}).sort({ role: 1 }); // Sort by role for predictable order
-        const parents = await Parent.find({});
-
-        const hierarchyTree = await buildHierarchyTree(users, parents);
+        // Parents are now users with role 'parent'
+        const hierarchyTree = await buildHierarchyTree(users, []);
 
         res.status(200).json(hierarchyTree);
     } catch (error) {
@@ -172,20 +186,29 @@ exports.getKeyActivationStats = async (req, res) => {
         const inactiveKeys = totalKeys - activeKeys;
 
         // Total Activations (parents with assigned keys)
-        const totalActivations = await Parent.countDocuments();
+        const totalActivations = await User.countDocuments({ role: 'parent' });
         // Expiring soon (within 30 days)
         const now = new Date();
         const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
         const expiringSoon = await Key.countDocuments({ validUntil: { $lte: in30Days, $gte: now }, isAssigned: true });
         const valid = await Key.countDocuments({ validUntil: { $gt: in30Days }, isAssigned: true });
 
+        // Get totalGenerated and transferredKeys for all admins
+        const adminUsers = await User.find({ role: 'admin' }).select('name email totalGenerated transferredKeys');
         res.status(200).json({
             totalKeys,
             active: activeKeys,
             inactive: inactiveKeys,
             totalActivations,
             expiringSoon,
-            valid
+            valid,
+            adminStats: adminUsers.map(a => ({
+                id: a._id,
+                name: a.name,
+                email: a.email,
+                totalGenerated: a.totalGenerated || 0,
+                transferredKeys: a.transferredKeys || 0
+            }))
         });
     } catch (error) {
         console.error('Error getting key/activation stats:', error);
@@ -197,7 +220,13 @@ exports.getKeyActivationStats = async (req, res) => {
 exports.getKeyInventory = async (req, res) => {
     try {
         const totalGenerated = await Key.countDocuments();
-        const transferred = await Key.countDocuments({ isAssigned: true });
+        // Count keys whose currentOwner is not any admin (i.e., transferred from admin)
+        const adminUsersRaw = await User.find({ role: 'admin' }).select('_id name email totalGenerated transferredKeys');
+        const adminIds = adminUsersRaw.map(u => u._id);
+        let transferred = 0;
+        if (adminIds.length > 0) {
+            transferred = await Key.countDocuments({ currentOwner: { $nin: adminIds } });
+        }
         const remaining = totalGenerated - transferred;
         const transferProgress = totalGenerated > 0 ? (transferred / totalGenerated) * 100 : 0;
 
@@ -205,7 +234,14 @@ exports.getKeyInventory = async (req, res) => {
             totalGenerated,
             transferred,
             remaining,
-            transferProgress: Math.round(transferProgress * 10) / 10 // one decimal place
+            transferProgress: Math.round(transferProgress * 10) / 10, // one decimal place
+            adminStats: adminUsersRaw.map(a => ({
+                id: a._id,
+                name: a.name,
+                email: a.email,
+                totalGenerated: a.totalGenerated || 0,
+                transferredKeys: a.transferredKeys || 0
+            }))
         });
     } catch (error) {
         console.error('Error getting key inventory:', error);
@@ -507,26 +543,35 @@ exports.transferKeysToNd = async (req, res) => {
             return res.status(404).json({ message: 'National Distributor not found.' });
         }
 
-        // Check available unassigned keys in the global pool
-        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false });
+
+        // Only transfer keys where currentOwner is the admin user
+        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
         if (keysToTransfer > availableUnassignedKeysCount) {
-            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available in the system.` });
+            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for this admin.` });
         }
 
-        // Find and update a batch of unassigned keys
-        // Note: This approach updates keys in a non-deterministic order. If specific keys need to be tracked, the Key model would need an 'assignedTo' field.
-        const keysToMarkAssigned = await Key.find({ isAssigned: false }).limit(keysToTransfer);
+        // Find and update a batch of unassigned keys owned by this admin
+        const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
         const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
 
         await Key.updateMany(
             { _id: { $in: keyIdsToUpdate } },
-            { $set: { isAssigned: true } }
+            { $set: { currentOwner: ndUser._id } }
         );
 
         // Update the ND's assignedKeys
         ndUser.assignedKeys += keysToTransfer;
         await ndUser.save();
-
+        // Increment transferredKeys for admin (sender)
+        await User.updateOne(
+            { _id: req.user._id },
+            { $inc: { transferredKeys: keysToTransfer } }
+        );
+        // Increment receivedKeys for ND (receiver)
+        await User.updateOne(
+            { _id: ndUser._id },
+            { $inc: { receivedKeys: keysToTransfer } }
+        );
         // Create a KeyTransferLog entry
         const newKeyTransferLog = new KeyTransferLog({
             fromUser: req.user._id, // Admin is the sender
@@ -537,7 +582,6 @@ exports.transferKeysToNd = async (req, res) => {
             notes: `Bulk transferred ${keysToTransfer} keys from Admin to ND: ${ndUser.name}`
         });
         await newKeyTransferLog.save();
-
         res.status(200).json({ message: 'Keys transferred to National Distributor successfully.' });
 
     } catch (error) {
@@ -595,7 +639,7 @@ exports.addNd = async (req, res) => {
         const keysToMarkAssigned = await Key.find({ isAssigned: false }).limit(keysToAssign);
         await Key.updateMany(
             { _id: { $in: keysToMarkAssigned.map(key => key._id) } },
-            { $set: { isAssigned: true } }
+            { $set: { isAssigned: true, currentOwner: newNd._id } }
         );
 
         // Create a KeyTransferLog entry for the bulk transfer from Admin to ND
@@ -739,6 +783,8 @@ exports.getAdminProfile = async (req, res) => {
             role: adminUser.role,
             assignedKeys: adminUser.assignedKeys,
             usedKeys: adminUser.usedKeys,
+            totalGenerated: adminUser.totalGenerated || 0,
+            transferredKeys: adminUser.transferredKeys || 0,
             createdAt: adminUser.createdAt,
             updatedAt: adminUser.updatedAt,
             lastLogin: adminUser.lastLogin,

@@ -2,6 +2,7 @@ const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
+const Key = require('../models/Key');
 
 // GET /db/dashboard/summary
 const getDashboardSummary = async (req, res) => {
@@ -89,7 +90,8 @@ const getDashboardSummary = async (req, res) => {
         const retailerIds = await User.find({ role: 'retailer', createdBy: dbUserId }).distinct('_id');
 
         // Activations Today
-        const dailyActivationsToday = await Parent.countDocuments({
+        const dailyActivationsToday = await User.countDocuments({
+            role: 'parent',
             createdBy: { $in: retailerIds },
             createdAt: { $gte: todayStart }
         });
@@ -102,18 +104,19 @@ const getDashboardSummary = async (req, res) => {
         thisMonday.setDate(now.getDate() - diffToMonday);
         thisMonday.setHours(0, 0, 0, 0);
 
-        const weeklyActivationsRaw = await Parent.aggregate([
+        const weeklyActivationsRaw = await User.aggregate([
             { $match: {
+                role: 'parent',
                 createdBy: { $in: retailerIds },
-                createdAt: { $gte: thisMonday, $lte: now } // Only count up to 'now' for the current day
+                createdAt: { $gte: thisMonday, $lte: now }
             }},
             { $group: {
-                _id: { $dayOfWeek: '$createdAt' }, // 1 for Sunday, 2 for Monday
+                _id: { $dayOfWeek: '$createdAt' },
                 count: { $sum: 1 }
             }},
             { $project: {
                 _id: 0,
-                dayOfWeek: { $subtract: ['$_id', 1] }, // Adjust to 0 for Sunday, 1 for Monday
+                dayOfWeek: { $subtract: ['$_id', 1] },
                 count: 1
             }}
         ]);
@@ -141,8 +144,9 @@ const getDashboardSummary = async (req, res) => {
         sevenDaysAgoStart.setDate(now.getDate() - 7);
         sevenDaysAgoStart.setHours(0, 0, 0, 0);
 
-        const lastSevenDaysActivationsAgg = await Parent.aggregate([
+        const lastSevenDaysActivationsAgg = await User.aggregate([
             { $match: {
+                role: 'parent',
                 createdBy: { $in: retailerIds },
                 createdAt: { $gte: sevenDaysAgoStart, $lte: now }
             }},
@@ -159,7 +163,8 @@ const getDashboardSummary = async (req, res) => {
         const thisWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - currentDay + (currentDay === 0 ? -6 : 1)); // Monday of current week
         thisWeekStart.setHours(0, 0, 0, 0);
 
-        const activationsThisWeek = await Parent.countDocuments({
+        const activationsThisWeek = await User.countDocuments({
+            role: 'parent',
             createdBy: { $in: retailerIds },
             createdAt: { $gte: thisWeekStart }
         });
@@ -188,7 +193,7 @@ const getDashboardSummary = async (req, res) => {
             },
             dailyActivations: {
                 today: dailyActivationsToday,
-                avgDaily: avgDailyActivations,
+                avgDaily:  avgDailyActivations,
                 weeklyPerformance: weeklyPerformance,
                 thisWeekSummary: {
                     count: activationsThisWeek,
@@ -229,7 +234,8 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
         const targetThisMonth = 15000;
 
         // Activations Today
-        const activationsToday = await Parent.countDocuments({
+        const activationsToday = await User.countDocuments({
+            role: 'parent',
             createdBy: { $in: retailerIds },
             createdAt: { $gte: todayStart }
         });
@@ -238,7 +244,8 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
         const todayRemaining = targetToday - activationsToday;
 
         // Activations This Week
-        const activationsThisWeek = await Parent.countDocuments({
+        const activationsThisWeek = await User.countDocuments({
+            role: 'parent',
             createdBy: { $in: retailerIds },
             createdAt: { $gte: thisWeekStart }
         });
@@ -247,7 +254,8 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
         const thisWeekRemaining = thisWeekTarget - activationsThisWeek;
 
         // Activations This Month
-        const activationsThisMonth = await Parent.countDocuments({
+        const activationsThisMonth = await User.countDocuments({
+            role: 'parent',
             createdBy: { $in: retailerIds },
             createdAt: { $gte: thisMonthStart }
         });
@@ -256,8 +264,8 @@ const getActivationSummaryAndTopRetailers = async (req, res) => {
         const thisMonthRemaining = targetThisMonth - activationsThisMonth;
 
         // Top Performing Retailers - Needs aggregation based on activations
-        const topPerformingRetailers = await Parent.aggregate([
-            { $match: { createdBy: { $in: retailerIds } } }, // Match parents created by these retailers
+        const topPerformingRetailers = await User.aggregate([
+            { $match: { role: 'parent', createdBy: { $in: retailerIds } } }, // Match parents created by these retailers
             { $group: {
                 _id: '$createdBy', // Group by retailer ID
                 totalActivations: { $sum: 1 } // Count activations for each retailer
@@ -474,48 +482,49 @@ const deleteRetailer = async (req, res) => {
 const transferKeysToRetailer = async (req, res) => {
     try {
         const { retailerId, keysToTransfer } = req.body;
-        const dbUserId = req.user._id;
-
         if (!retailerId || !keysToTransfer || keysToTransfer <= 0) {
-            return res.status(400).json({ message: 'Please provide retailerId and a positive number of keys to transfer.' });
+            return res.status(400).json({ message: 'Please provide a valid Retailer ID and a positive number of keys to transfer.' });
         }
-
-        const retailerUser = await User.findOne({ _id: retailerId, role: 'retailer', createdBy: dbUserId });
+        const retailerUser = await User.findOne({ _id: retailerId, role: 'retailer', createdBy: req.user._id });
         if (!retailerUser) {
-            return res.status(404).json({ message: 'Retailer not found or not authorized to transfer keys.' });
+            return res.status(404).json({ message: 'Retailer not found.' });
         }
-
-        const dbUser = await User.findById(dbUserId);
-        if (!dbUser) {
-            return res.status(404).json({ message: 'Distributor user not found.' });
+        // Count available unassigned keys currently owned by DB
+        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
+        if (keysToTransfer > availableUnassignedKeysCount) {
+            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for this DB.` });
         }
-
-        const dbAssignedKeys = dbUser.assignedKeys || 0;
-        const dbUsedKeys = dbUser.usedKeys || 0;
-        const dbBalanceKeys = dbAssignedKeys - dbUsedKeys;
-        const keysToAssign = keysToTransfer || 0;
-
-        if (keysToAssign > dbBalanceKeys) {
-            return res.status(400).json({ message: `Cannot transfer ${keysToAssign} keys. Distributor only has ${dbBalanceKeys} available keys.` });
-        }
-
-        dbUser.usedKeys += keysToAssign;
-        retailerUser.assignedKeys += keysToAssign;
-        await dbUser.save();
+        // Find and update a batch of unassigned keys owned by this DB
+        const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
+        const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
+        await Key.updateMany(
+            { _id: { $in: keyIdsToUpdate } },
+            { $set: { currentOwner: retailerUser._id } }
+        );
+        // Update Retailer assignedKeys
+        retailerUser.assignedKeys += keysToTransfer;
         await retailerUser.save();
-
+        // Increment transferredKeys for DB (sender)
+        await User.updateOne(
+            { _id: req.user._id },
+            { $inc: { transferredKeys: keysToTransfer } }
+        );
+        // Increment receivedKeys for Retailer (receiver)
+        await User.updateOne(
+            { _id: retailerUser._id },
+            { $inc: { receivedKeys: keysToTransfer } }
+        );
+        // Create KeyTransferLog
         const newKeyTransferLog = new KeyTransferLog({
-            fromUser: dbUserId,
+            fromUser: req.user._id,
             toUser: retailerId,
-            count: keysToAssign,
+            count: keysToTransfer,
             status: 'completed',
-            type: 'distribute', // Changed from 'regular' to 'distribute'
-            notes: `Transferred ${keysToAssign} keys from Distributor to Retailer`
+            type: 'bulk',
+            notes: `Bulk transferred ${keysToTransfer} keys from DB to Retailer: ${retailerUser.name}`
         });
         await newKeyTransferLog.save();
-
-        res.status(200).json({ message: 'Keys transferred successfully to Retailer.' });
-
+        res.status(200).json({ message: 'Keys transferred to Retailer successfully.' });
     } catch (error) {
         console.error('Error transferring keys to Retailer:', error);
         res.status(500).json({ message: 'Server error during key transfer.' });
@@ -585,7 +594,7 @@ const getDbProfile = async (req, res) => {
     try {
         const dbUserId = req.user._id;
 
-        const dbUser = await User.findById(dbUserId).select('-password');
+        const dbUser = await User.findById(dbUserId).select('-password -totalGenerated');
         if (!dbUser) {
             return res.status(404).json({ message: 'Distributor profile not found.' });
         }
@@ -1086,8 +1095,10 @@ const receiveKeysFromSs = async (req, res) => {
             return res.status(400).json({ message: 'Invalid or unauthorized SS user.' });
         }
 
-        // Update DB's assigned keys (total received)
+
+        // Update DB's assigned keys (total received) and receivedKeys
         dbUser.assignedKeys += quantity;
+        dbUser.receivedKeys = (dbUser.receivedKeys || 0) + quantity;
         await dbUser.save();
 
         const newKeyTransferLog = new KeyTransferLog({
@@ -1140,9 +1151,12 @@ const distributeKeysToRetailers = async (req, res) => {
             return res.status(400).json({ message: `Cannot distribute ${quantity} keys. Distributor only has ${dbBalanceKeys} available keys.` });
         }
 
-        // Update DB's used keys and retailer's assigned keys
+
+        // Update DB's used keys, transferredKeys, and retailer's assignedKeys, receivedKeys
         dbUser.usedKeys += quantity;
+        dbUser.transferredKeys = (dbUser.transferredKeys || 0) + quantity;
         retailerUser.assignedKeys += quantity;
+        retailerUser.receivedKeys = (retailerUser.receivedKeys || 0) + quantity;
         await dbUser.save();
         await retailerUser.save();
 

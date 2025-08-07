@@ -1,3 +1,4 @@
+const Key = require('../models/Key');
 const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
 const bcrypt = require('bcrypt');
@@ -73,7 +74,8 @@ const getDashboardSummary = async (req, res) => {
 
         const retailerIdsUnderSs = await User.find({ role: 'retailer', createdBy: { $in: dbUsersCreatedBySs } }).distinct('_id');
 
-        const todayActivations = await Parent.countDocuments({
+        const todayActivations = await User.countDocuments({
+            role: 'parent',
             createdBy: { $in: retailerIdsUnderSs },
             createdAt: { $gte: todayStart }
         });
@@ -148,8 +150,18 @@ const getDistributorStats = async (req, res) => {
             { $group: { _id: null, total: { $sum: '$assignedKeys' } } }
         ]);
         const totalKeys = keysAssignedAgg[0]?.total || 0;
-
-        res.status(200).json({ total, active, inactive, totalKeys });
+        // Aggregate transferredKeys and receivedKeys for DB users
+        const transferredKeysAgg = await User.aggregate([
+            { $match: { role: 'db', createdBy: req.user._id } },
+            { $group: { _id: null, total: { $sum: '$transferredKeys' } } }
+        ]);
+        const receivedKeysAgg = await User.aggregate([
+            { $match: { role: 'db', createdBy: req.user._id } },
+            { $group: { _id: null, total: { $sum: '$receivedKeys' } } }
+        ]);
+        const totalTransferredKeys = transferredKeysAgg[0]?.total || 0;
+        const totalReceivedKeys = receivedKeysAgg[0]?.total || 0;
+        res.status(200).json({ total, active, inactive, totalKeys, totalTransferredKeys, totalReceivedKeys });
     } catch (error) {
         console.error('Error getting Distributor stats for SS:', error);
         res.status(500).json({ message: 'Server error during Distributor stats retrieval.' });
@@ -337,50 +349,51 @@ const deleteDistributor = async (req, res) => {
 const transferKeysToDb = async (req, res) => {
     try {
         const { dbId, keysToTransfer } = req.body;
-        const ssUserId = req.user._id;
-
         if (!dbId || !keysToTransfer || keysToTransfer <= 0) {
-            return res.status(400).json({ message: 'Please provide dbId and a positive number of keys to transfer.' });
+            return res.status(400).json({ message: 'Please provide a valid Distributor ID and a positive number of keys to transfer.' });
         }
-
-        const dbUser = await User.findOne({ _id: dbId, role: 'db', createdBy: ssUserId });
+        const dbUser = await User.findOne({ _id: dbId, role: 'db', createdBy: req.user._id });
         if (!dbUser) {
-            return res.status(404).json({ message: 'Distributor not found or not authorized to transfer keys.' });
+            return res.status(404).json({ message: 'Distributor not found.' });
         }
-
-        const ssUser = await User.findById(ssUserId);
-        if (!ssUser) {
-            return res.status(404).json({ message: 'State Supervisor user not found.' });
+        // Count available unassigned keys currently owned by SS
+        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
+        if (keysToTransfer > availableUnassignedKeysCount) {
+            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for this SS.` });
         }
-
-        const ssAssignedKeys = ssUser.assignedKeys || 0;
-        const ssUsedKeys = ssUser.usedKeys || 0;
-        const ssBalanceKeys = ssAssignedKeys - ssUsedKeys;
-        const keysToAssign = keysToTransfer || 0;
-
-        if (keysToAssign > ssBalanceKeys) {
-            return res.status(400).json({ message: `Cannot transfer ${keysToAssign} keys. SS only has ${ssBalanceKeys} available keys.` });
-        }
-
-        ssUser.usedKeys += keysToAssign;
-        dbUser.assignedKeys += keysToAssign;
-        await ssUser.save();
+        // Find and update a batch of unassigned keys owned by this SS
+        const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
+        const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
+        await Key.updateMany(
+            { _id: { $in: keyIdsToUpdate } },
+            { $set: { currentOwner: dbUser._id } }
+        );
+        // Update DB assignedKeys
+        dbUser.assignedKeys += keysToTransfer;
         await dbUser.save();
-
+        // Increment transferredKeys for SS (sender)
+        await User.updateOne(
+            { _id: req.user._id },
+            { $inc: { transferredKeys: keysToTransfer } }
+        );
+        // Increment receivedKeys for DB (receiver)
+        await User.updateOne(
+            { _id: dbUser._id },
+            { $inc: { receivedKeys: keysToTransfer } }
+        );
+        // Create KeyTransferLog
         const newKeyTransferLog = new KeyTransferLog({
-            fromUser: ssUserId,
+            fromUser: req.user._id,
             toUser: dbId,
-            count: keysToAssign,
+            count: keysToTransfer,
             status: 'completed',
-            type: 'regular',
-            notes: `Transferred ${keysToAssign} keys from SS to Distributor`
+            type: 'bulk',
+            notes: `Bulk transferred ${keysToTransfer} keys from SS to DB: ${dbUser.name}`
         });
         await newKeyTransferLog.save();
-
-        res.status(200).json({ message: 'Keys transferred successfully to Distributor.' });
-
+        res.status(200).json({ message: 'Keys transferred to Distributor successfully.' });
     } catch (error) {
-        console.error('Error transferring keys to Distributor:', error);
+        console.error('Error transferring keys to DB:', error);
         res.status(500).json({ message: 'Server error during key transfer.' });
     }
 };
