@@ -5,6 +5,102 @@ const KeyTransferLog = require('../models/KeyTransferLog');
 const { generateCsv } = require('../utils/csv');
 const bcrypt = require('bcrypt');
 const { validationResult } = require('express-validator');
+// Paginated ND list
+exports.getNdListPaginated = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        const total = await User.countDocuments({ role: 'nd' });
+        const totalPages = Math.ceil(total / limit);
+        const users = await User.find({ role: 'nd' })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .select('name createdAt');
+        const entries = users.map(u => ({
+            id: u._id,
+            name: u.name,
+            joinedDate: u.createdAt
+        }));
+        res.json({ entries, totalPages });
+    } catch (err) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// Paginated SS list
+exports.getSsListPaginated = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        const total = await User.countDocuments({ role: 'ss' });
+        const totalPages = Math.ceil(total / limit);
+        const users = await User.find({ role: 'ss' })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .select('name createdAt');
+        const entries = users.map(u => ({
+            id: u._id,
+            name: u.name,
+            joinedDate: u.createdAt
+        }));
+        res.json({ entries, totalPages });
+    } catch (err) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// Paginated DB list
+exports.getDbListPaginated = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        const total = await User.countDocuments({ role: 'db' });
+        const totalPages = Math.ceil(total / limit);
+        const users = await User.find({ role: 'db' })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .select('name createdAt');
+        const entries = users.map(u => ({
+            id: u._id,
+            name: u.name,
+            joinedDate: u.createdAt
+        }));
+        res.json({ entries, totalPages });
+    } catch (err) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// Paginated Retailer list
+exports.getRetailerListPaginated = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        const total = await User.countDocuments({ role: 'retailer' });
+        const totalPages = Math.ceil(total / limit);
+        const users = await User.find({ role: 'retailer' })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .select('name createdAt');
+        const entries = users.map(u => ({
+            id: u._id,
+            name: u.name,
+            joinedDate: u.createdAt
+        }));
+        res.json({ entries, totalPages });
+    } catch (err) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 
 // Helper to generate a unique hexadecimal key
 const generateHexKey = (length) => {

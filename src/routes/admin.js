@@ -1,12 +1,24 @@
 const express = require('express');
-const router = express.Router();
 const { authenticateToken, authorizeRole } = require('../middleware/auth');
 const adminController = require('../controllers/adminController');
 
-// POST /admin/generate-keys
-router.post('/generate-keys', authenticateToken, authorizeRole(['admin']), adminController.generateKeys);
+const router = express.Router();
+const User = require('../models/User');
+// ...existing code...
 
-// POST /admin/transfer-keys-to-nd
+// ...existing code...
+
+// GET /admin/nd-list-paginated
+router.get('/nd-list-paginated', adminController.getNdListPaginated);
+
+// GET /admin/ss-list-paginated
+router.get('/ss-list-paginated', adminController.getSsListPaginated);
+
+// GET /admin/db-list-paginated
+router.get('/db-list-paginated', adminController.getDbListPaginated);
+
+// GET /admin/retailer-list-paginated
+router.get('/retailer-list-paginated', adminController.getRetailerListPaginated);
 router.post('/transfer-keys-to-nd', authenticateToken, authorizeRole(['admin']), adminController.transferKeysToNd);
 
 // POST /admin/nd
