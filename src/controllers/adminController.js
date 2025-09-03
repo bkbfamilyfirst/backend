@@ -145,7 +145,7 @@ async function buildHierarchyTree(users, parents) {
     return hierarchy;
 }
 
-// POST /admin/generate-keys
+// POST /admin  
 exports.generateKeys = async (req, res) => {
     const { count, keyLength } = req.body;
 
@@ -312,6 +312,25 @@ exports.getKeyActivationStats = async (req, res) => {
     }
 };
 
+// GET /admin/last-key-generation
+exports.getLastKeyGeneration = async (req, res) => {
+    try {
+        // Find the most recent key creation timestamp
+        const latestKey = await Key.findOne({}).sort({ createdAt: -1 }).select('createdAt');
+        if (!latestKey) {
+            return res.status(404).json({ message: 'No keys found.' });
+        }
+        // Count all keys created at that timestamp
+        const count = await Key.countDocuments({ createdAt: latestKey.createdAt });
+        res.status(200).json({
+            count,
+            generatedAt: latestKey.createdAt.toISOString()
+        });
+    } catch (error) {
+        console.error('Error getting last key generation:', error);
+        res.status(500).json({ message: 'Server error during last key generation retrieval.' });
+    }
+};
 // GET /admin/key-inventory
 exports.getKeyInventory = async (req, res) => {
     try {

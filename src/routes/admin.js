@@ -4,22 +4,21 @@ const adminController = require('../controllers/adminController');
 
 const router = express.Router();
 const User = require('../models/User');
-// ...existing code...
-
-// ...existing code...
 
 // GET /admin/nd-list-paginated
-router.get('/nd-list-paginated', adminController.getNdListPaginated);
+router.get('/nd-list-paginated', authenticateToken, authorizeRole(['admin']), adminController.getNdListPaginated);
 
 // GET /admin/ss-list-paginated
-router.get('/ss-list-paginated', adminController.getSsListPaginated);
+router.get('/ss-list-paginated', authenticateToken, authorizeRole(['admin']), adminController.getSsListPaginated);
 
 // GET /admin/db-list-paginated
-router.get('/db-list-paginated', adminController.getDbListPaginated);
+router.get('/db-list-paginated', authenticateToken, authorizeRole(['admin']), adminController.getDbListPaginated);
 
 // GET /admin/retailer-list-paginated
-router.get('/retailer-list-paginated', adminController.getRetailerListPaginated);
+router.get('/retailer-list-paginated', authenticateToken, authorizeRole(['admin']), adminController.getRetailerListPaginated);
 router.post('/transfer-keys-to-nd', authenticateToken, authorizeRole(['admin']), adminController.transferKeysToNd);
+
+router.post('/generate-keys', authenticateToken, authorizeRole(['admin']), adminController.generateKeys);
 
 // POST /admin/nd
 router.post('/nd', authenticateToken, authorizeRole(['admin']), adminController.addNd);
@@ -78,4 +77,7 @@ router.patch('/profile', authenticateToken, authorizeRole(['admin']), adminContr
 // PATCH /admin/change-password
 router.patch('/change-password', authenticateToken, authorizeRole(['admin']), adminController.changePassword);
 
-module.exports = router; 
+// GET /admin/last-key-generation
+router.get('/last-key-generation', authenticateToken, authorizeRole(['admin']), adminController.getLastKeyGeneration);
+
+module.exports = router;
