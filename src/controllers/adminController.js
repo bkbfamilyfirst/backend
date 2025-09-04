@@ -708,11 +708,11 @@ exports.transferKeysToNd = async (req, res) => {
 // POST /admin/nd
 exports.addNd = async (req, res) => {
     try {
-        const { name, email, phone, location, status, assignedKeys, companyName, notes } = req.body;
+        const { name, email, phone, location, status, assignedKeys, companyName, notes, password } = req.body;
         const adminUserId = req.user._id;
 
-        if (!name || !email || !phone || !location || !companyName) {
-            return res.status(400).json({ message: 'Please provide company name, contact person name, email, phone, and location.' });
+        if (!name || !email || !phone || !location || !companyName || !password) {
+            return res.status(400).json({ message: 'Please provide company name, contact person name, email, phone, location, and password.' });
         }
 
         // Check if email already exists
@@ -729,9 +729,8 @@ exports.addNd = async (req, res) => {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Only ${availableUnassignedKeysCount} unassigned keys available in the system.` });
         }
 
-        // Generate a default password (e.g., first part of email + 123, or a random string)
-        const defaultPassword = email.split('@')[0] + '123';
-        const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+        // Hash the provided password
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         const newNd = new User({
             name,
@@ -770,7 +769,7 @@ exports.addNd = async (req, res) => {
             await newKeyTransferLog.save();
         }
 
-        res.status(201).json({ message: 'National Distributor created successfully.', nd: { id: newNd._id, name: newNd.name, email: newNd.email, defaultPassword, companyName: newNd.companyName, notes: newNd.notes } });
+        res.status(201).json({ message: 'National Distributor created successfully.', nd: { id: newNd._id, name: newNd.name, email: newNd.email, password, companyName: newNd.companyName, notes: newNd.notes } });
 
     } catch (error) {
         console.error('Error adding new ND for Admin:', error);
