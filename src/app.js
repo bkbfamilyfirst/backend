@@ -15,8 +15,8 @@
     const app = express();
 
     // CORS configuration with debugging
-    const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'];
-
+    // const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'];
+    const allowedOrigins = '*'; // Allow all origins for development; change in production
     console.log('🌐 CORS Configuration:');
     console.log('Environment:', process.env.NODE_ENV);
     console.log('Allowed Origins:', allowedOrigins);

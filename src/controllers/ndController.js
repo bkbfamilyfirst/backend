@@ -409,18 +409,19 @@ const updateNdProfile = async (req, res) => {
 // POST /nd/ss
 const addSs = async (req, res) => {
     try {
-        const { name, email, phone, address, status, assignedKeys } = req.body;
+        const { name, username, email, phone, address, status, assignedKeys, password } = req.body;
         const ndUserId = req.user._id;
 
         // Basic validation
-        if (!name || !email || !phone || !address) {
-            return res.status(400).json({ message: 'Please provide name, email, phone, and address.' });
+        if (!name || !username || !email || !phone || !address || !password) {
+            return res.status(400).json({ message: 'Please provide name, username, email, phone, address, and password.' });
         }
 
-        // Check if email already exists
-        const existingUser = await User.findOne({ email });
+        // Check if username, email, or phone already exists
+        const existingUser = await User.findOne({ $or: [ { email }, { phone }, { username } ] });
         if (existingUser) {
-            return res.status(409).json({ message: 'User with this email already exists.' });
+            let conflictField = existingUser.email === email ? 'email' : (existingUser.phone === phone ? 'phone' : 'username');
+            return res.status(409).json({ message: `User with this ${conflictField} already exists.` });
         }
 
         // Fetch current ND's key balance
@@ -438,12 +439,12 @@ const addSs = async (req, res) => {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. ND only has ${ndBalanceKeys} available keys.` });
         }
 
-        // Generate a default password (e.g., first part of email + 123, or a random string)
-        const defaultPassword = email.split('@')[0] + '123'; // Example: user@example.com -> user123
-        const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+        // Hash the provided password
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         const newSs = new User({
             name,
+            username,
             email,
             phone,
             password: hashedPassword,
@@ -461,11 +462,21 @@ const addSs = async (req, res) => {
         ndUser.usedKeys += keysToAssign;
         await ndUser.save();
 
-        // Respond with the new SS user, excluding sensitive info
-        const responseSs = newSs.toObject();
-        delete responseSs.password; // Remove password for general response
-
-        res.status(201).json({ message: 'State Supervisor added successfully.', ss: responseSs, defaultPassword: defaultPassword });
+        res.status(201).json({
+            message: 'State Supervisor added successfully.',
+            ss: {
+                id: newSs._id,
+                name: newSs.name,
+                username: newSs.username,
+                email: newSs.email,
+                phone: newSs.phone,
+                password,
+                address: newSs.address,
+                status: newSs.status,
+                assignedKeys: newSs.assignedKeys,
+                usedKeys: newSs.usedKeys
+            }
+        });
 
     } catch (error) {
         console.error('Error adding new SS for ND:', error);

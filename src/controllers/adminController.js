@@ -101,7 +101,6 @@ exports.getRetailerListPaginated = async (req, res) => {
     }
 };
 
-
 // Helper to generate a unique hexadecimal key
 const generateHexKey = (length) => {
     let result = '';
@@ -708,17 +707,18 @@ exports.transferKeysToNd = async (req, res) => {
 // POST /admin/nd
 exports.addNd = async (req, res) => {
     try {
-        const { name, email, phone, location, status, assignedKeys, companyName, notes, password } = req.body;
+        const { name, username, email, phone, location, status, assignedKeys, companyName, notes, password } = req.body;
         const adminUserId = req.user._id;
 
-        if (!name || !email || !phone || !location || !companyName || !password) {
-            return res.status(400).json({ message: 'Please provide company name, contact person name, email, phone, location, and password.' });
+        if (!name || !username || !email || !phone || !location || !companyName || !password) {
+            return res.status(400).json({ message: 'Please provide company name, contact person name, username, email, phone, location, and password.' });
         }
 
-        // Check if email already exists
-        const existingUser = await User.findOne({ email });
+        // Check if username, email, or phone already exists
+        const existingUser = await User.findOne({ $or: [ { email }, { phone }, { username } ] });
         if (existingUser) {
-            return res.status(409).json({ message: 'User with this email already exists.' });
+            let conflictField = existingUser.email === email ? 'email' : (existingUser.phone === phone ? 'phone' : 'username');
+            return res.status(409).json({ message: `User with this ${conflictField} already exists.` });
         }
 
         // Fetch available unassigned keys in the global pool
@@ -726,7 +726,7 @@ exports.addNd = async (req, res) => {
         const keysToAssign = assignedKeys || 0;
 
         if (keysToAssign > availableUnassignedKeysCount) {
-            return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Only ${availableUnassignedKeysCount} unassigned keys available in the system.` });
+            return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Only ${availableUnassignedKeysCount} Unassigned keys available in the system.` });
         }
 
         // Hash the provided password
@@ -734,6 +734,7 @@ exports.addNd = async (req, res) => {
 
         const newNd = new User({
             name,
+            username,
             email,
             phone,
             password: hashedPassword,
@@ -769,7 +770,19 @@ exports.addNd = async (req, res) => {
             await newKeyTransferLog.save();
         }
 
-        res.status(201).json({ message: 'National Distributor created successfully.', nd: { id: newNd._id, name: newNd.name, email: newNd.email, password, companyName: newNd.companyName, notes: newNd.notes } });
+        res.status(201).json({
+            message: 'National Distributor created successfully.',
+            nd: {
+                id: newNd._id,
+                name: newNd.name,
+                username: newNd.username,
+                email: newNd.email,
+                phone: newNd.phone,
+                password,
+                companyName: newNd.companyName,
+                notes: newNd.notes
+            }
+        });
 
     } catch (error) {
         console.error('Error adding new ND for Admin:', error);

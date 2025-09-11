@@ -1,3 +1,9 @@
+const User = require('../models/User');
+const Key = require('../models/Key');
+const KeyTransferLog = require('../models/KeyTransferLog');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
 // GET /retailer/owned-keys
 exports.listOwnedKeys = async (req, res) => {
   try {
@@ -114,11 +120,7 @@ exports.getDashboardSummary = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
-const User = require('../models/User');
-const Key = require('../models/Key');
-const KeyTransferLog = require('../models/KeyTransferLog');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+
 
 // GET /retailer/parent-list
 exports.listParents = async (req, res) => {

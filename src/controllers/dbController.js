@@ -368,16 +368,18 @@ const getRetailerList = async (req, res) => {
 // POST /db/retailers (Add Retailer)
 const addRetailer = async (req, res) => {
     try {
-        const { name, email, phone, address, status, assignedKeys } = req.body;
+        const { name, username, email, phone, address, status, assignedKeys, password } = req.body;
         const dbUserId = req.user._id;
 
-        if (!name || !email || !phone || !address) {
-            return res.status(400).json({ message: 'Please provide name, email, phone, and address.' });
+        if (!name || !username || !email || !phone || !address || !password) {
+            return res.status(400).json({ message: 'Please provide name, username, email, phone, address, and password.' });
         }
 
-        const existingUser = await User.findOne({ email });
+        // Check if username, email, or phone already exists
+        const existingUser = await User.findOne({ $or: [ { email }, { phone }, { username } ] });
         if (existingUser) {
-            return res.status(409).json({ message: 'User with this email already exists.' });
+            let conflictField = existingUser.email === email ? 'email' : (existingUser.phone === phone ? 'phone' : 'username');
+            return res.status(409).json({ message: `User with this ${conflictField} already exists.` });
         }
 
         // Fetch current DB's key balance
@@ -395,11 +397,12 @@ const addRetailer = async (req, res) => {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Distributor only has ${dbBalanceKeys} available keys.` });
         }
 
-        const defaultPassword = email.split('@')[0] + '123';
-        const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+        // Hash the provided password
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         const newRetailer = new User({
             name,
+            username,
             email,
             phone,
             password: hashedPassword,
@@ -420,7 +423,7 @@ const addRetailer = async (req, res) => {
         const responseRetailer = newRetailer.toObject();
         delete responseRetailer.password;
 
-        res.status(201).json({ message: 'Retailer added successfully.', retailer: responseRetailer, defaultPassword: defaultPassword });
+        res.status(201).json({ message: 'Retailer added successfully.', retailer: responseRetailer, password });
 
     } catch (error) {
         console.error('Error adding new Retailer for DB:', error);

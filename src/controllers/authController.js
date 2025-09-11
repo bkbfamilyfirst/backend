@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+
 // Generate JWT Access Token
 const generateAccessToken = (user) => {
     return jwt.sign({ id: user._id, role: user.role }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '7d' });
@@ -18,34 +19,40 @@ exports.login = async (req, res) => {
     console.log('Request body:', JSON.stringify(req.body));
     console.log('Request headers:', JSON.stringify(req.headers));
     
-    const { email, password } = req.body;
-    console.log(`Email provided: ${email || 'none'}`);
+    const { identifier, password } = req.body;
+    console.log(`Identifier provided: ${identifier || 'none'}`);
     console.log(`Password provided: ${password ? '******' : 'none'}`);
 
-    if (!email || !password) {
-        console.log('Error: Missing email or password');
-        return res.status(400).json({ message: 'Please enter email and password.' });
+    if (!identifier || !password) {
+        console.log('Error: Missing identifier or password');
+        return res.status(400).json({ message: 'Please enter username, email, or phone and password.' });
     }
 
     try {
-        console.log(`Looking for user with email: ${email}`);
-        const user = await User.findOne({ email });
-        
+        console.log(`Looking for user with identifier: ${identifier}`);
+        const user = await User.findOne({
+            $or: [
+                { email: identifier },
+                { username: identifier },
+                { phone: identifier }
+            ]
+        });
+
         if (!user) {
-            console.log(`User with email ${email} not found in database`);
-            return res.status(401).json({ message: 'Invalid credentials.' });
+            console.log(`User with identifier ${identifier} not found in database`);
+            return res.status(401).json({ message: 'Invalid credentials. Please enter correct username, email, or phone.' });
         }
-        
+
         console.log(`User found: ${user._id}, role: ${user.role}`);
-        
+
         console.log('Comparing passwords...');
         const isMatch = await bcrypt.compare(password, user.password);
-        
+
         if (!isMatch) {
             console.log('Password comparison failed');
-            return res.status(401).json({ message: 'Invalid credentials.' });
+            return res.status(401).json({ message: 'Invalid credentials. Please enter correct password.' });
         }
-        
+
         console.log('Password verified successfully');
         
         console.log('Generating tokens...');
@@ -59,13 +66,12 @@ exports.login = async (req, res) => {
         console.log('Hashing refresh token...');
         const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
         console.log('Hash completed, storing in user document...');
-        
-        console.log(`Current refresh tokens count: ${user.refreshTokens ? user.refreshTokens.length : 0}`);
-        user.refreshTokens.push(hashedRefreshToken);
-        
-        console.log('Saving user with new refresh token...');
-        await user.save();
-        console.log('User saved successfully');
+        // Use atomic $push to avoid VersionError
+        await User.updateOne(
+            { _id: user._id },
+            { $push: { refreshTokens: hashedRefreshToken } }
+        );
+        console.log('Refresh token pushed atomically to user document');
 
         console.log('Setting refresh token cookie...');
         res.cookie('refreshToken', refreshToken, { 

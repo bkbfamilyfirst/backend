@@ -229,16 +229,18 @@ const getKeyTransferLogs = async (req, res) => {
 // POST /ss/distributors
 const addDistributor = async (req, res) => {
     try {
-        const { name, email, phone, location, status, assignedKeys } = req.body;
+        const { name, username, email, phone, location, status, assignedKeys, password } = req.body;
         const ssUserId = req.user._id;
 
-        if (!name || !email || !phone || !location) {
-            return res.status(400).json({ message: 'Please provide name, email, phone, and region.' });
+        if (!name || !username || !email || !phone || !location || !password) {
+            return res.status(400).json({ message: 'Please provide name, username, email, phone, region, and password.' });
         }
 
-        const existingUser = await User.findOne({ email });
+        // Check if username, email, or phone already exists
+        const existingUser = await User.findOne({ $or: [ { email }, { phone }, { username } ] });
         if (existingUser) {
-            return res.status(409).json({ message: 'User with this email already exists.' });
+            let conflictField = existingUser.email === email ? 'email' : (existingUser.phone === phone ? 'phone' : 'username');
+            return res.status(409).json({ message: `User with this ${conflictField} already exists.` });
         }
 
         const ssUser = await User.findById(ssUserId);
@@ -255,11 +257,12 @@ const addDistributor = async (req, res) => {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. SS only has ${ssBalanceKeys} available keys.` });
         }
 
-        const defaultPassword = email.split('@')[0] + '123';
-        const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+        // Hash the provided password
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         const newDistributor = new User({
             name,
+            username,
             email,
             phone,
             password: hashedPassword,
@@ -281,7 +284,7 @@ const addDistributor = async (req, res) => {
         // Map backend 'address' to frontend 'location' for consistency
         responseDistributor.location = newDistributor.address || "Not specified";
 
-        res.status(201).json({ message: 'Distributor added successfully.', distributor: responseDistributor, defaultPassword: defaultPassword });
+        res.status(201).json({ message: 'Distributor added successfully.', distributor: responseDistributor, password });
 
     } catch (error) {
         console.error('Error adding new Distributor for SS:', error);
