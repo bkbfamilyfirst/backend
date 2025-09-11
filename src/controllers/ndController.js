@@ -229,11 +229,11 @@ const getReportsSummary = async (req, res) => {
         const ssIds = await User.find({ role: 'ss', createdBy: ndUserId }).distinct('_id');
 
         // Current ND's assignedKeys and usedKeys for balance
-        const ndUser = await User.findById(ndUserId).select('assignedKeys usedKeys');
+        const ndUser = await User.findById(ndUserId).select('assignedKeys usedKeys receivedKeys transferredKeys');
         const ndAssignedKeys = ndUser?.assignedKeys || 0;
         const ndUsedKeys = ndUser?.usedKeys || 0;
-        const balanceKeys = ndAssignedKeys - ndUsedKeys;
-        const transferRate = ndAssignedKeys > 0 ? ((ndUsedKeys / ndAssignedKeys) * 100).toFixed(2) : 0;
+        const balanceKeys = ndUser?.receivedKeys - ndUser?.transferredKeys;
+        const transferRate = ndAssignedKeys > 0 ? ((ndUser?.transferredKeys / ndUser?.receivedKeys) * 100).toFixed(2) : 0;
 
         // Total Transferred Keys: Sum of count from KeyTransferLog where fromUser is the current ND user
         const totalTransferredKeysAgg = await KeyTransferLog.aggregate([
