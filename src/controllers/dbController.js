@@ -726,13 +726,13 @@ const getDbKeyDistributionStats = async (req, res) => {
     try {
         const dbUserId = req.user._id;
 
-        const dbUser = await User.findById(dbUserId).select('assignedKeys usedKeys');
+        const dbUser = await User.findById(dbUserId).select('assignedKeys usedKeys transferredKeys recievedKeys');
         if (!dbUser) {
             return res.status(404).json({ message: 'Distributor user not found.' });
         }
 
-        const totalReceivedKeys = dbUser.assignedKeys || 0; // This is the total assigned to DB
-        const allocatedKeys = dbUser.usedKeys || 0; // Keys DB has assigned to retailers
+        const totalReceivedKeys = dbUser.receivedKeys || 0; // This is the total assigned to DB
+        const allocatedKeys = dbUser.transferredKeys || 0; // Keys DB has assigned to retailers
         const balanceKeys = totalReceivedKeys - allocatedKeys;
 
         // Date calculations for filters

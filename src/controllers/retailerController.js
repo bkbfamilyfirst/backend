@@ -138,81 +138,97 @@ exports.listParents = async (req, res) => {
 };
 // POST /retailer/create-parent
 exports.createParent = async (req, res) => {
-    const { name, phone, email, assignedKey } = req.body;
-    if (!name || !phone || !assignedKey) {
-        return res.status(400).json({ message: 'Parent name, phone, and assigned key are required.' });
+  const { name, phone, email, password, assignedKey } = req.body;
+  console.log('[createParent] Incoming request:', { name, phone, email, assignedKey });
+  if (!name || !phone) {
+    console.log('[createParent] Missing required fields:', { name, phone });
+    return res.status(400).json({ message: 'Parent name and phone are required.' });
+  }
+  try {
+    // If email is provided, check if it already exists
+    if (email) {
+      console.log('[createParent] Checking for existing parent by email:', email);
+      const existingParentByEmail = await User.findOne({ email, role: 'parent' });
+      if (existingParentByEmail) {
+        console.log('[createParent] Duplicate email found:', email);
+        return res.status(409).json({ message: 'Parent with this email already exists.' });
+      }
     }
-    try {
-        // If email is provided, check if it already exists
-        if (email) {
-            const existingParentByEmail = await User.findOne({ email, role: 'parent' });
-            if (existingParentByEmail) {
-                return res.status(409).json({ message: 'Parent with this email already exists.' });
-            }
-        }
-        // If phone is provided, check if it already exists
-        if (phone) {
-            const existingParentByPhone = await User.findOne({ phone, role: 'parent' });
-            if (existingParentByPhone) {
-          return res.status(409).json({ message: 'Parent with this phone number already exists.' });
-            }
-        }
-        // Check if assignedKey is valid and not already assigned
-        const key = await Key.findOne({ key: assignedKey });
-        if (!key) {
-            return res.status(404).json({ message: 'Invalid activation key.' });
-        }
-        if (key.isAssigned) {
-            return res.status(409).json({ message: 'Activation key already assigned.' });
-        }
-        // Hash password (auto-generate or from req.body)
-        let password = req.body.password;
-        if (!password) {
-            password = Math.random().toString(36).slice(-8); // Generate random 8-char password
-        }
-        const hashedPassword = await bcrypt.hash(password, 10);
-        // Create parent as User with role 'parent'
-        const parentData = {
-            name,
-            phone,
-            password: hashedPassword,
-            role: 'parent',
-            assignedKey,
-            createdBy: req.user._id,
-        };
-        if (email) parentData.email = email;
-        const parent = new User(parentData);
-        await parent.save();
-        // Assign key
-        key.isAssigned = true;
-        key.assignedTo = parent._id;
-        key.assignedAt = new Date();
-        key.currentOwner = parent._id;
-        await key.save();
-        // Increment assignedKeys for retailer
-        await User.updateOne(
-            { _id: req.user._id },
-            { $inc: { transferredKeys: 1 } }
-        );
-        await User.updateOne(
-            { _id: parent._id },
-            { $inc: { receivedKeys: 1, assignedKeys: 1 } }
-        );
-        res.status(201).json({
-            message: 'Parent created successfully.',
-            parent: {
-                id: parent._id,
-                name: parent.name,
-                phone: parent.phone,
-                email: parent.email,
-                assignedKey: parent.assignedKey,
-            },
-            password: req.body.password ? undefined : password // Only return if auto-generated
-        });
-    } catch (error) {
-        console.error('Error creating parent:', error);
-        res.status(500).json({ message: 'Server error during parent creation.' });
+    // If phone is provided, check if it already exists
+    if (phone) {
+      console.log('[createParent] Checking for existing parent by phone:', phone);
+      const existingParentByPhone = await User.findOne({ phone, role: 'parent' });
+      if (existingParentByPhone) {
+        console.log('[createParent] Duplicate phone found:', phone);
+        return res.status(409).json({ message: 'Parent with this phone number already exists.' });
+      }
     }
+    // Hash password (auto-generate or from req.body)
+    let password = req.body.password;
+    if (!password) {
+      password = Math.random().toString(36).slice(-8); // Generate random 8-char password
+      console.log('[createParent] Auto-generated password:', password);
+    }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    // Create parent as User with role 'parent'
+    const parentData = {
+      name,
+      phone,
+      password: hashedPassword,
+      role: 'parent',
+      createdBy: req.user._id,
+    };
+    if (email) parentData.email = email;
+    if (assignedKey) parentData.assignedKey = assignedKey;
+    console.log('[createParent] Creating parent with data:', parentData);
+    const parent = new User(parentData);
+    await parent.save();
+    console.log('[createParent] Parent created:', parent._id);
+    // If assignedKey is provided, assign key and update stats
+    if (assignedKey) {
+      console.log('[createParent] AssignedKey provided, processing key assignment:', assignedKey);
+      const key = await Key.findOne({ key: assignedKey });
+      if (!key) {
+        console.log('[createParent] Invalid activation key:', assignedKey);
+        return res.status(404).json({ message: 'Invalid activation key.' });
+      }
+      if (key.isAssigned) {
+        console.log('[createParent] Activation key already assigned:', assignedKey);
+        return res.status(409).json({ message: 'Activation key already assigned.' });
+      }
+      key.isAssigned = true;
+      key.assignedTo = parent._id;
+      key.assignedAt = new Date();
+      key.currentOwner = parent._id;
+      await key.save();
+      console.log('[createParent] Key assigned to parent:', parent._id);
+      // Increment assignedKeys for retailer
+      await User.updateOne(
+        { _id: req.user._id },
+        { $inc: { transferredKeys: 1 } }
+      );
+      await User.updateOne(
+        { _id: parent._id },
+        { $inc: { receivedKeys: 1, assignedKeys: 1 } }
+      );
+      console.log('[createParent] Retailer and parent stats updated.');
+    }
+    res.status(201).json({
+      message: 'Parent created successfully.',
+      parent: {
+        id: parent._id,
+        name: parent.name,
+        phone: parent.phone,
+        email: parent.email,
+        assignedKey: parent.assignedKey,
+      },
+      password: req.body.password ? undefined : password // Only return if auto-generated
+    });
+    console.log('[createParent] Success response sent.');
+  } catch (error) {
+    console.error('[createParent] Error creating parent:', error);
+    res.status(500).json({ message: `Server error during parent creation. ${error}` });
+  }
 };
 
 
