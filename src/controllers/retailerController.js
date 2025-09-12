@@ -138,13 +138,22 @@ exports.listParents = async (req, res) => {
 };
 // POST /retailer/create-parent
 exports.createParent = async (req, res) => {
-  const { name, phone, email, password, assignedKey } = req.body;
-  console.log('[createParent] Incoming request:', { name, phone, email, assignedKey });
-  if (!name || !phone) {
-    console.log('[createParent] Missing required fields:', { name, phone });
-    return res.status(400).json({ message: 'Parent name and phone are required.' });
+  const { name, username, phone, email, password, assignedKey, address, notes } = req.body;
+  console.log('[createParent] Incoming request:', { name, username, phone, email, assignedKey, address, notes });
+  if (!name || !username || !phone) {
+    console.log('[createParent] Missing required fields:', { name, username, phone });
+    return res.status(400).json({ message: 'Parent name, username, and phone are required.' });
   }
   try {
+    // If username is provided, check if it already exists
+    if (username) {
+      console.log('[createParent] Checking for existing parent by username:', username);
+      const existingParentByUsername = await User.findOne({ username, role: 'parent' });
+      if (existingParentByUsername) {
+        console.log('[createParent] Duplicate username found:', username);
+        return res.status(409).json({ message: 'Parent with this username already exists.' });
+      }
+    }
     // If email is provided, check if it already exists
     if (email) {
       console.log('[createParent] Checking for existing parent by email:', email);
@@ -173,6 +182,7 @@ exports.createParent = async (req, res) => {
     // Create parent as User with role 'parent'
     const parentData = {
       name,
+      username,
       phone,
       password: hashedPassword,
       role: 'parent',
@@ -180,6 +190,8 @@ exports.createParent = async (req, res) => {
     };
     if (email) parentData.email = email;
     if (assignedKey) parentData.assignedKey = assignedKey;
+    if (address) parentData.address = address;
+    if (notes) parentData.notes = notes;
     console.log('[createParent] Creating parent with data:', parentData);
     const parent = new User(parentData);
     await parent.save();
@@ -218,8 +230,11 @@ exports.createParent = async (req, res) => {
       parent: {
         id: parent._id,
         name: parent.name,
+        username: parent.username,
         phone: parent.phone,
         email: parent.email,
+        address: parent.address,
+        notes: parent.notes,
         assignedKey: parent.assignedKey,
       },
       password: req.body.password ? undefined : password // Only return if auto-generated
