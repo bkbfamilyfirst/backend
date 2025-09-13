@@ -37,13 +37,13 @@ exports.getReports = async (req, res) => {
     // Get full retailer user doc for all fields
     const retailerUser = await User.findById(retailerId).select('assignedKeys usedKeys transferredKeys receivedKeys');
     // Total keys for retailer: use assignedKeys as the main metric
-    const totalKeys = retailerUser?.assignedKeys || 0;
+    const totalKeys = retailerUser?.receivedKeys || 0;
     // Total assigned keys (from User model)
     const assignedKeys = retailerUser?.assignedKeys || 0;
     // Used keys (transferred to parents)
     const usedKeys = retailerUser?.usedKeys || 0;
     // Balance = assigned - used
-    const totalBalance = assignedKeys - usedKeys;
+    const totalBalance = totalKeys - usedKeys;
     // Total transferred (from User model: transferredKeys)
     const totalTransferred = retailerUser?.transferredKeys || 0;
     const totalReceived = retailerUser?.receivedKeys || 0;
@@ -260,6 +260,7 @@ exports.getRetailerProfile = async (req, res) => {
       name: retailer.name,
       email: retailer.email,
       phone: retailer.phone,
+      username: retailer.username,
       address: retailer.address,
       status: retailer.status,
       assignedKeys: retailer.assignedKeys || 0,
@@ -338,7 +339,7 @@ exports.getActivationHistory = async (req, res) => {
 };
 
 // GET /retailer/key-info
-exports.eyInfo = async (req, res) => {
+exports.keyInfo = async (req, res) => {
   try {
     const retailerId = req.user.id;
     // Find all keys assigned to this retailer
