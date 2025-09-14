@@ -34,6 +34,7 @@ exports.getKeyInfo = async (req, res) => {
 exports.getReports = async (req, res) => {
   try {
     const retailerId = req.user.id;
+    const period = req.query.period || 'daily';
     // Get full retailer user doc for all fields
     const retailerUser = await User.findById(retailerId).select('assignedKeys usedKeys transferredKeys receivedKeys');
     // Total keys for retailer: use assignedKeys as the main metric
@@ -43,19 +44,36 @@ exports.getReports = async (req, res) => {
     // Used keys (transferred to parents)
     const usedKeys = retailerUser?.usedKeys || 0;
     // Balance = assigned - used
-    const totalBalance = totalKeys - usedKeys;
+    const totalBalance = totalKeys - retailerUser?.transferredKeys;
     // Total transferred (from User model: transferredKeys)
     const totalTransferred = retailerUser?.transferredKeys || 0;
     const totalReceived = retailerUser?.receivedKeys || 0;
-    // Daily activations (today)
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-    const dailyActivations = await KeyTransferLog.countDocuments({
+
+    // Period-based activations
+    let dateFilter = {};
+    const now = new Date();
+    if (period === 'daily') {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      const end = new Date();
+      end.setHours(23, 59, 59, 999);
+      dateFilter = { $gte: start, $lte: end };
+    } else if (period === 'weekly') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - now.getDay());
+      start.setHours(0, 0, 0, 0);
+      dateFilter = { $gte: start, $lte: now };
+    } else if (period === 'monthly') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      dateFilter = { $gte: start, $lte: now };
+    } else if (period === 'yearly') {
+      const start = new Date(now.getFullYear(), 0, 1);
+      dateFilter = { $gte: start, $lte: now };
+    }
+    const periodActivations = await KeyTransferLog.countDocuments({
       from: retailerId,
       transferType: 'retailer-to-parent',
-      createdAt: { $gte: todayStart, $lte: todayEnd }
+      createdAt: dateFilter
     });
     // Total active parents
     const totalActiveParents = await User.countDocuments({ createdBy: retailerId, role: 'parent', status: 'active' });
@@ -66,7 +84,7 @@ exports.getReports = async (req, res) => {
       totalBalance,
       totalTransferred,
       totalReceived,
-      dailyActivations,
+      periodActivations,
       totalActiveParents
     });
   } catch (err) {
