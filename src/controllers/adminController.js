@@ -8,96 +8,559 @@ const { validationResult } = require('express-validator');
 // Paginated ND list
 exports.getNdListPaginated = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        // Parse & validate query params
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const rawLimit = parseInt(req.query.limit) || 10;
+        const MAX_LIMIT = 100;
+        const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
+        const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 500) : null;
+        const status = req.query.status;
+        const allowedStatuses = ['active', 'inactive', 'blocked'];
+        if (status && !allowedStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid status value' });
+        }
+        const startDateRaw = req.query.startDate;
+        const endDateRaw = req.query.endDate;
+        let startDate, endDate;
+        if (startDateRaw) {
+            startDate = new Date(startDateRaw);
+            if (isNaN(startDate.getTime())) return res.status(400).json({ error: 'Invalid startDate format' });
+        }
+        if (endDateRaw) {
+            endDate = new Date(endDateRaw);
+            if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
+        }
+        const sortBy = req.query.sortBy || 'createdAt';
+        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
+
+        // Build aggregation pipeline
+        const match = { role: 'nd' };
+        if (status) match.status = status;
+        if (startDate || endDate) {
+            match.createdAt = {};
+            if (startDate) match.createdAt.$gte = startDate;
+            if (endDate) {
+                // include entire day for endDate if time not specified
+                endDate.setHours(23,59,59,999);
+                match.createdAt.$lte = endDate;
+            }
+        }
+
+        const pipeline = [ { $match: match } ];
+
+        // Search - prefer $text if index exists, otherwise regex OR across fields
+        if (search) {
+            // simple tokenization: split by whitespace and require all terms to match (AND)
+            const terms = search.split(/\s+/).filter(Boolean);
+            const andClauses = terms.map(term => ({
+                $or: [
+                    { name: { $regex: term, $options: 'i' } },
+                    { username: { $regex: term, $options: 'i' } },
+                    { email: { $regex: term, $options: 'i' } },
+                    { phone: { $regex: term, $options: 'i' } },
+                    { companyName: { $regex: term, $options: 'i' } }
+                ]
+            }));
+            pipeline.push({ $match: { $and: andClauses } });
+        }
+
+        // Sorting
+        const sortStage = { $sort: { [sortBy]: sortOrder, _id: 1 } };
+
+        // Facet for data + total
         const skip = (page - 1) * limit;
-        const total = await User.countDocuments({ role: 'nd' });
-        const totalPages = Math.ceil(total / limit);
-        const users = await User.find({ role: 'nd' })
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .select('name createdAt');
-        const entries = users.map(u => ({
-            id: u._id,
+        pipeline.push({ $facet: {
+            data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
+                id: '$_id', name: 1, username:1, email:1, phone:1, role:1,
+                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
+            }} ],
+            totalCount: [ { $count: 'count' } ]
+        }});
+
+        const aggResult = await User.aggregate(pipeline).allowDiskUse(true).exec();
+        const data = aggResult[0]?.data || [];
+        const total = aggResult[0]?.totalCount[0]?.count || 0;
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+
+        // Map entries to expected shape
+        const entries = data.map(u => ({
+            id: u.id,
             name: u.name,
-            joinedDate: u.createdAt
+            username: u.username,
+            email: u.email,
+            phone: u.phone,
+            role: u.role,
+            assignedKeys: u.assignedKeys || 0,
+            usedKeys: u.usedKeys || 0,
+            transferredKeys: u.transferredKeys || 0,
+            receivedKeys: u.receivedKeys || 0,
+            companyName: u.companyName,
+            address: u.address,
+            status: u.status,
+            bio: u.bio,
+            notes: u.notes,
+            createdBy: u.createdBy,
+            lastLogin: u.lastLogin,
+            joinedDate: u.createdAt,
+            createdAt: u.createdAt,
+            updatedAt: u.updatedAt
         }));
-        res.json({ entries, totalPages });
+
+        return res.json({ entries, totalPages, total, page, limit });
     } catch (err) {
-        res.status(500).json({ message: 'Server error' });
+        console.error('Error in getNdListPaginated:', err);
+        return res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// Generic paginated list builder for users by role to avoid duplication
+async function getListPaginatedByRole(req, res, role, allowedSortBy = ['name', 'createdAt']) {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const rawLimit = parseInt(req.query.limit) || 10;
+        const MAX_LIMIT = 100;
+        const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
+        const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 500) : null;
+        const status = req.query.status;
+        const allowedStatuses = ['active', 'inactive', 'blocked'];
+        if (status && !allowedStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid status value' });
+        }
+        const startDateRaw = req.query.startDate;
+        const endDateRaw = req.query.endDate;
+        let startDate, endDate;
+        if (startDateRaw) {
+            startDate = new Date(startDateRaw);
+            if (isNaN(startDate.getTime())) return res.status(400).json({ error: 'Invalid startDate format' });
+        }
+        if (endDateRaw) {
+            endDate = new Date(endDateRaw);
+            if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
+        }
+        const sortBy = req.query.sortBy || 'createdAt';
+        if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+        const match = { role };
+        if (status) match.status = status;
+        if (startDate || endDate) {
+            match.createdAt = {};
+            if (startDate) match.createdAt.$gte = startDate;
+            if (endDate) {
+                endDate.setHours(23,59,59,999);
+                match.createdAt.$lte = endDate;
+            }
+        }
+
+        const pipeline = [ { $match: match } ];
+        if (search) {
+            const terms = search.split(/\s+/).filter(Boolean);
+            const andClauses = terms.map(term => ({
+                $or: [
+                    { name: { $regex: term, $options: 'i' } },
+                    { username: { $regex: term, $options: 'i' } },
+                    { email: { $regex: term, $options: 'i' } },
+                    { phone: { $regex: term, $options: 'i' } },
+                    { companyName: { $regex: term, $options: 'i' } }
+                ]
+            }));
+            pipeline.push({ $match: { $and: andClauses } });
+        }
+
+        const sortStage = { $sort: { [sortBy]: sortOrder, _id: 1 } };
+        const skip = (page - 1) * limit;
+        pipeline.push({ $facet: {
+            data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
+                id: '$_id', name: 1, username:1, email:1, phone:1, role:1,
+                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
+            }} ],
+            totalCount: [ { $count: 'count' } ]
+        }});
+
+        const aggResult = await User.aggregate(pipeline).allowDiskUse(true).exec();
+        const data = aggResult[0]?.data || [];
+        const total = aggResult[0]?.totalCount[0]?.count || 0;
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+
+        const entries = data.map(u => ({
+            id: u.id,
+            name: u.name,
+            username: u.username,
+            email: u.email,
+            phone: u.phone,
+            role: u.role,
+            assignedKeys: u.assignedKeys || 0,
+            usedKeys: u.usedKeys || 0,
+            transferredKeys: u.transferredKeys || 0,
+            receivedKeys: u.receivedKeys || 0,
+            companyName: u.companyName,
+            address: u.address,
+            status: u.status,
+            bio: u.bio,
+            notes: u.notes,
+            createdBy: u.createdBy,
+            lastLogin: u.lastLogin,
+            joinedDate: u.createdAt,
+            createdAt: u.createdAt,
+            updatedAt: u.updatedAt
+        }));
+
+        return res.json({ entries, totalPages, total, page, limit });
+    } catch (err) {
+        console.error('Error in getListPaginatedByRole:', err);
+        return res.status(500).json({ message: 'Server error' });
+    }
+}
+
+// GET /admin/admin-list-paginated
+exports.getAdminListPaginated = async (req, res) => getListPaginatedByRole(req, res, 'admin', ['name', 'createdAt']);
+
+// Edit admin (reuse helper)
+exports.editAdmin = async (req, res) => adminUpdateUserByRole(req, res, 'admin');
+
+// PATCH /admin/admin/:id/change-password - Admin changing another admin's password
+exports.adminChangePassword = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { password } = req.body || {};
+        if (!id) return res.status(400).json({ message: 'Admin id is required' });
+        if (!password || typeof password !== 'string' || password.length < 6) {
+            return res.status(400).json({ message: 'A valid password (min 6 characters) must be provided in the request body.' });
+        }
+
+        const adminUser = await User.findOne({ _id: id, role: 'admin' });
+        if (!adminUser) return res.status(404).json({ message: 'Admin user not found.' });
+
+        const hashed = await bcrypt.hash(String(password), 10);
+        adminUser.password = hashed;
+        adminUser.refreshTokens = [];
+        adminUser.passwordResetCount = (adminUser.passwordResetCount || 0) + 1;
+        await adminUser.save();
+
+        const safe = adminUser.toObject();
+        delete safe.password;
+        delete safe.refreshTokens;
+        delete safe.__v;
+
+        return res.status(200).json({ message: 'Admin password updated successfully.', admin: safe });
+    } catch (error) {
+        console.error('Error in adminChangePassword:', error);
+        return res.status(500).json({ message: 'Server error during admin password change.' });
     }
 };
 
 // Paginated SS list
 exports.getSsListPaginated = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        // Parse & validate query params
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const rawLimit = parseInt(req.query.limit) || 10;
+        const MAX_LIMIT = 100;
+        const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
+        const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 500) : null;
+        const status = req.query.status;
+        const allowedStatuses = ['active', 'inactive', 'blocked'];
+        if (status && !allowedStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid status value' });
+        }
+        const startDateRaw = req.query.startDate;
+        const endDateRaw = req.query.endDate;
+        let startDate, endDate;
+        if (startDateRaw) {
+            startDate = new Date(startDateRaw);
+            if (isNaN(startDate.getTime())) return res.status(400).json({ error: 'Invalid startDate format' });
+        }
+        if (endDateRaw) {
+            endDate = new Date(endDateRaw);
+            if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
+        }
+        const sortBy = req.query.sortBy || 'createdAt';
+        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
+
+        // Build aggregation pipeline
+        const match = { role: 'ss' };
+        if (status) match.status = status;
+        if (startDate || endDate) {
+            match.createdAt = {};
+            if (startDate) match.createdAt.$gte = startDate;
+            if (endDate) {
+                endDate.setHours(23,59,59,999);
+                match.createdAt.$lte = endDate;
+            }
+        }
+
+        const pipeline = [ { $match: match } ];
+
+        if (search) {
+            const terms = search.split(/\s+/).filter(Boolean);
+            const andClauses = terms.map(term => ({
+                $or: [
+                    { name: { $regex: term, $options: 'i' } },
+                    { username: { $regex: term, $options: 'i' } },
+                    { email: { $regex: term, $options: 'i' } },
+                    { phone: { $regex: term, $options: 'i' } },
+                    { companyName: { $regex: term, $options: 'i' } }
+                ]
+            }));
+            pipeline.push({ $match: { $and: andClauses } });
+        }
+
+        const sortStage = { $sort: { [sortBy]: sortOrder, _id: 1 } };
         const skip = (page - 1) * limit;
-        const total = await User.countDocuments({ role: 'ss' });
-        const totalPages = Math.ceil(total / limit);
-        const users = await User.find({ role: 'ss' })
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .select('name createdAt');
-        const entries = users.map(u => ({
-            id: u._id,
+        pipeline.push({ $facet: {
+            data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
+                id: '$_id', name: 1, username:1, email:1, phone:1, password:1, role:1,
+                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
+            }} ],
+            totalCount: [ { $count: 'count' } ]
+        }});
+
+        const aggResult = await User.aggregate(pipeline).allowDiskUse(true).exec();
+        const data = aggResult[0]?.data || [];
+        const total = aggResult[0]?.totalCount[0]?.count || 0;
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+        const entries = data.map(u => ({
+            id: u.id,
             name: u.name,
-            joinedDate: u.createdAt
+            username: u.username,
+            email: u.email,
+            phone: u.phone,
+            role: u.role,
+            assignedKeys: u.assignedKeys || 0,
+            usedKeys: u.usedKeys || 0,
+            transferredKeys: u.transferredKeys || 0,
+            receivedKeys: u.receivedKeys || 0,
+            companyName: u.companyName,
+            address: u.address,
+            status: u.status,
+            bio: u.bio,
+            notes: u.notes,
+            createdBy: u.createdBy,
+            lastLogin: u.lastLogin,
+            joinedDate: u.createdAt,
+            createdAt: u.createdAt,
+            updatedAt: u.updatedAt
         }));
-        res.json({ entries, totalPages });
+
+        return res.json({ entries, totalPages, total, page, limit });
     } catch (err) {
-        res.status(500).json({ message: 'Server error' });
+        console.error('Error in getSsListPaginated:', err);
+        return res.status(500).json({ message: 'Server error' });
     }
 };
 
 // Paginated DB list
 exports.getDbListPaginated = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        // Parse & validate query params
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const rawLimit = parseInt(req.query.limit) || 10;
+        const MAX_LIMIT = 100;
+        const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
+        const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 500) : null;
+        const status = req.query.status;
+        const allowedStatuses = ['active', 'inactive', 'blocked'];
+        if (status && !allowedStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid status value' });
+        }
+        const startDateRaw = req.query.startDate;
+        const endDateRaw = req.query.endDate;
+        let startDate, endDate;
+        if (startDateRaw) {
+            startDate = new Date(startDateRaw);
+            if (isNaN(startDate.getTime())) return res.status(400).json({ error: 'Invalid startDate format' });
+        }
+        if (endDateRaw) {
+            endDate = new Date(endDateRaw);
+            if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
+        }
+        const sortBy = req.query.sortBy || 'createdAt';
+        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
+
+        // Build aggregation pipeline
+        const match = { role: 'db' };
+        if (status) match.status = status;
+        if (startDate || endDate) {
+            match.createdAt = {};
+            if (startDate) match.createdAt.$gte = startDate;
+            if (endDate) {
+                endDate.setHours(23,59,59,999);
+                match.createdAt.$lte = endDate;
+            }
+        }
+
+        const pipeline = [ { $match: match } ];
+
+        if (search) {
+            const terms = search.split(/\s+/).filter(Boolean);
+            const andClauses = terms.map(term => ({
+                $or: [
+                    { name: { $regex: term, $options: 'i' } },
+                    { username: { $regex: term, $options: 'i' } },
+                    { email: { $regex: term, $options: 'i' } },
+                    { phone: { $regex: term, $options: 'i' } },
+                    { companyName: { $regex: term, $options: 'i' } }
+                ]
+            }));
+            pipeline.push({ $match: { $and: andClauses } });
+        }
+
+        const sortStage = { $sort: { [sortBy]: sortOrder, _id: 1 } };
         const skip = (page - 1) * limit;
-        const total = await User.countDocuments({ role: 'db' });
-        const totalPages = Math.ceil(total / limit);
-        const users = await User.find({ role: 'db' })
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .select('name createdAt');
-        const entries = users.map(u => ({
-            id: u._id,
+        pipeline.push({ $facet: {
+            data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
+                id: '$_id', name: 1, username:1, email:1, phone:1, password:1, role:1,
+                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
+            }} ],
+            totalCount: [ { $count: 'count' } ]
+        }});
+
+        const aggResult = await User.aggregate(pipeline).allowDiskUse(true).exec();
+        const data = aggResult[0]?.data || [];
+        const total = aggResult[0]?.totalCount[0]?.count || 0;
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+        const entries = data.map(u => ({
+            id: u.id,
             name: u.name,
-            joinedDate: u.createdAt
+            username: u.username,
+            email: u.email,
+            phone: u.phone,
+            password: u.password,
+            role: u.role,
+            assignedKeys: u.assignedKeys || 0,
+            usedKeys: u.usedKeys || 0,
+            transferredKeys: u.transferredKeys || 0,
+            receivedKeys: u.receivedKeys || 0,
+            companyName: u.companyName,
+            address: u.address,
+            status: u.status,
+            bio: u.bio,
+            notes: u.notes,
+            createdBy: u.createdBy,
+            lastLogin: u.lastLogin,
+            joinedDate: u.createdAt,
+            createdAt: u.createdAt,
+            updatedAt: u.updatedAt
         }));
-        res.json({ entries, totalPages });
+
+        return res.json({ entries, totalPages, total, page, limit });
     } catch (err) {
-        res.status(500).json({ message: 'Server error' });
+        console.error('Error in getDbListPaginated:', err);
+        return res.status(500).json({ message: 'Server error' });
     }
 };
 
 // Paginated Retailer list
 exports.getRetailerListPaginated = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        // Parse & validate query params
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const rawLimit = parseInt(req.query.limit) || 10;
+        const MAX_LIMIT = 100;
+        const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
+        const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 500) : null;
+        const status = req.query.status;
+        const allowedStatuses = ['active', 'inactive', 'blocked'];
+        if (status && !allowedStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid status value' });
+        }
+        const startDateRaw = req.query.startDate;
+        const endDateRaw = req.query.endDate;
+        let startDate, endDate;
+        if (startDateRaw) {
+            startDate = new Date(startDateRaw);
+            if (isNaN(startDate.getTime())) return res.status(400).json({ error: 'Invalid startDate format' });
+        }
+        if (endDateRaw) {
+            endDate = new Date(endDateRaw);
+            if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
+        }
+        const sortBy = req.query.sortBy || 'createdAt';
+        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
+
+        // Build aggregation pipeline
+        const match = { role: 'retailer' };
+        if (status) match.status = status;
+        if (startDate || endDate) {
+            match.createdAt = {};
+            if (startDate) match.createdAt.$gte = startDate;
+            if (endDate) {
+                endDate.setHours(23,59,59,999);
+                match.createdAt.$lte = endDate;
+            }
+        }
+
+        const pipeline = [ { $match: match } ];
+
+        if (search) {
+            const terms = search.split(/\s+/).filter(Boolean);
+            const andClauses = terms.map(term => ({
+                $or: [
+                    { name: { $regex: term, $options: 'i' } },
+                    { username: { $regex: term, $options: 'i' } },
+                    { email: { $regex: term, $options: 'i' } },
+                    { phone: { $regex: term, $options: 'i' } },
+                    { companyName: { $regex: term, $options: 'i' } }
+                ]
+            }));
+            pipeline.push({ $match: { $and: andClauses } });
+        }
+
+        const sortStage = { $sort: { [sortBy]: sortOrder, _id: 1 } };
         const skip = (page - 1) * limit;
-        const total = await User.countDocuments({ role: 'retailer' });
-        const totalPages = Math.ceil(total / limit);
-        const users = await User.find({ role: 'retailer' })
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .select('name createdAt');
-        const entries = users.map(u => ({
-            id: u._id,
+        pipeline.push({ $facet: {
+            data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
+                id: '$_id', name: 1, username:1, email:1, phone:1, password:1, role:1,
+                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
+            }} ],
+            totalCount: [ { $count: 'count' } ]
+        }});
+
+        const aggResult = await User.aggregate(pipeline).allowDiskUse(true).exec();
+        const data = aggResult[0]?.data || [];
+        const total = aggResult[0]?.totalCount[0]?.count || 0;
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+        const entries = data.map(u => ({
+            id: u.id,
             name: u.name,
-            joinedDate: u.createdAt
+            username: u.username,
+            email: u.email,
+            phone: u.phone,
+            password: u.password,
+            role: u.role,
+            assignedKeys: u.assignedKeys || 0,
+            usedKeys: u.usedKeys || 0,
+            transferredKeys: u.transferredKeys || 0,
+            receivedKeys: u.receivedKeys || 0,
+            companyName: u.companyName,
+            address: u.address,
+            status: u.status,
+            bio: u.bio,
+            notes: u.notes,
+            createdBy: u.createdBy,
+            lastLogin: u.lastLogin,
+            joinedDate: u.createdAt,
+            createdAt: u.createdAt,
+            updatedAt: u.updatedAt
         }));
-        res.json({ entries, totalPages });
+
+        return res.json({ entries, totalPages, total, page, limit });
     } catch (err) {
-        res.status(500).json({ message: 'Server error' });
+        console.error('Error in getRetailerListPaginated:', err);
+        return res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -330,6 +793,38 @@ exports.getLastKeyGeneration = async (req, res) => {
         res.status(500).json({ message: 'Server error during last key generation retrieval.' });
     }
 };
+
+// POST /admin/reset-password/:id
+// Admin-supplied password change: admin must provide the plaintext password in the body.
+// This endpoint will hash & store the provided password, clear refresh tokens, and return success.
+exports.resetUserPasswordByAdmin = async (req, res) => {
+    try {
+        const userId = req.params.id;
+        if (!userId) return res.status(400).json({ message: 'User id is required' });
+
+        const { password } = req.body || {};
+        if (!password || typeof password !== 'string' || password.length < 6) {
+            return res.status(400).json({ message: 'A valid password (min 6 characters) must be provided in the request body.' });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Hash and save provided password
+        const saltRounds = 10;
+        const hashed = await bcrypt.hash(String(password), saltRounds);
+        user.password = hashed;
+        // Clear refresh tokens to invalidate existing sessions
+        if (user.refreshTokens) user.refreshTokens = [];
+        user.passwordResetCount = (user.passwordResetCount || 0) + 1;
+        await user.save();
+
+        return res.status(200).json({ id: user._id, username: user.username, message: 'Password updated successfully.' });
+    } catch (error) {
+        console.error('Error in resetUserPasswordByAdmin:', error);
+        return res.status(500).json({ message: 'Server error during password reset.' });
+    }
+};
 // GET /admin/key-inventory
 exports.getKeyInventory = async (req, res) => {
     try {
@@ -430,7 +925,7 @@ exports.getNdList = async (req, res) => {
             name: nd.name,
             email: nd.email,
             phone: nd.phone,
-            location: nd.location,
+            location: nd.address,
             status: nd.status,
             assignedKeys: nd.assignedKeys,
             usedKeys: nd.usedKeys,
@@ -707,11 +1202,11 @@ exports.transferKeysToNd = async (req, res) => {
 // POST /admin/nd
 exports.addNd = async (req, res) => {
     try {
-        const { name, username, email, phone, location, status, assignedKeys, companyName, notes, password } = req.body;
+    const { name, username, email, phone, address, status, assignedKeys, companyName, notes, password } = req.body;
         const adminUserId = req.user._id;
 
-        if (!name || !username || !email || !phone || !location || !companyName || !password) {
-            return res.status(400).json({ message: 'Please provide company name, contact person name, username, email, phone, location, and password.' });
+        if (!name || !username || !email || !phone || !address || !companyName || !password) {
+            return res.status(400).json({ message: 'Please provide company name, contact person name, username, email, phone, address, and password.' });
         }
 
         // Check if username, email, or phone already exists
@@ -740,7 +1235,7 @@ exports.addNd = async (req, res) => {
             password: hashedPassword,
             role: 'nd',
             createdBy: adminUserId,
-            location,
+            address: address,
             companyName,
             status: status || 'active',
             assignedKeys: keysToAssign,
@@ -791,38 +1286,149 @@ exports.addNd = async (req, res) => {
 };
 
 // PATCH /admin/nd/:ndId
+
+// Generic helper to update a user by role with admin privileges
+async function adminUpdateUserByRole(req, res, expectedRole) {
+    try {
+        const { id } = req.params;
+        const updates = req.body || {};
+
+        // Ensure target exists and has expected role
+        const target = await User.findById(id);
+        if (!target || target.role !== expectedRole) {
+            return res.status(404).json({ message: `${expectedRole.toUpperCase()} not found.` });
+        }
+
+        // Allowed fields to update (extendable)
+        const allowedFields = ['name', 'firstName', 'lastName', 'email', 'phone', 'status', 'companyName', 'notes', 'address', 'bio'];
+
+        // Build $set and $inc objects for atomic partial update
+        const set = {};
+        const inc = {};
+        for (const key of allowedFields) {
+            if (Object.prototype.hasOwnProperty.call(updates, key) && updates[key] !== undefined) {
+                set[key] = updates[key];
+            }
+        }
+
+        // Note: username changes are ignored here for safety (silent ignore)
+
+        // email uniqueness check
+        if (updates.email !== undefined) {
+            const existing = await User.findOne({ email: updates.email, _id: { $ne: id } });
+            if (existing) return res.status(409).json({ message: 'Email already in use.' });
+            set.email = updates.email;
+        }
+
+        // phone uniqueness check
+        if (updates.phone !== undefined) {
+            const existing = await User.findOne({ phone: updates.phone, _id: { $ne: id } });
+            if (existing) return res.status(409).json({ message: 'Phone already in use.' });
+            set.phone = updates.phone;
+        }
+
+        // Password change (admin can set a new password) -> hash & clear refresh tokens, increment counter
+        let willIncrementPasswordCount = false;
+        if (Object.prototype.hasOwnProperty.call(updates, 'password') && updates.password !== undefined && updates.password !== '') {
+            const hashed = await bcrypt.hash(String(updates.password), 10);
+            set.password = hashed;
+            set.refreshTokens = [];
+            willIncrementPasswordCount = true;
+        }
+
+        // If nothing to update, return current sanitized user
+        if (Object.keys(set).length === 0 && !willIncrementPasswordCount) {
+            const safeUser = target.toObject();
+            delete safeUser.password;
+            delete safeUser.refreshTokens;
+            delete safeUser.__v;
+            return res.status(200).json({ message: `${expectedRole.toUpperCase()} updated successfully.`, [expectedRole]: safeUser });
+        }
+
+        const updateDoc = {};
+        if (Object.keys(set).length > 0) updateDoc.$set = set;
+        if (willIncrementPasswordCount) updateDoc.$inc = { passwordResetCount: 1 };
+
+        const updated = await User.findOneAndUpdate({ _id: id, role: expectedRole }, updateDoc, { new: true, runValidators: true });
+        if (!updated) return res.status(404).json({ message: `${expectedRole.toUpperCase()} not found.` });
+
+        const safeUser = updated.toObject();
+        delete safeUser.password;
+        delete safeUser.refreshTokens;
+        delete safeUser.__v;
+
+        return res.status(200).json({ message: `${expectedRole.toUpperCase()} updated successfully.`, [expectedRole]: safeUser });
+    } catch (error) {
+        console.error(`Error updating ${expectedRole}:`, error);
+        return res.status(500).json({ message: 'Server error during update.' });
+    }
+}
+
+// PATCH /admin/ss/:id - Edit SS by admin
+exports.editSs = async (req, res) => adminUpdateUserByRole(req, res, 'ss');
+
+// PATCH /admin/db/:id - Edit DB by admin
+exports.editDb = async (req, res) => adminUpdateUserByRole(req, res, 'db');
+
+// PATCH /admin/retailer/:id - Edit Retailer by admin
+exports.editRetailer = async (req, res) => adminUpdateUserByRole(req, res, 'retailer');
+
+// PATCH /admin/parent/:id - Edit Parent by admin
+exports.editParent = async (req, res) => adminUpdateUserByRole(req, res, 'parent');
+
+// PATCH /admin/nd/:ndId - Edit ND
 exports.editNd = async (req, res) => {
     try {
         const { ndId } = req.params;
-        const { name, email, phone, location, status, companyName, notes } = req.body;
+        if (!ndId) return res.status(400).json({ message: 'ndId is required' });
 
-        const ndUser = await User.findById(ndId);
-        if (!ndUser || ndUser.role !== 'nd') {
-            return res.status(404).json({ message: 'National Distributor not found.' });
-        }
-
-        // Update fields if provided
-        if (name) ndUser.name = name;
-        if (email) {
-            const existingUser = await User.findOne({ email, _id: { $ne: ndId } });
-            if (existingUser) {
-                return res.status(409).json({ message: 'User with this email already exists.' });
+        // Collect allowed fields from body (only set if present)
+        // Prefer `address` field; accept legacy `location` and map it to `address` for compatibility
+        const allowed = ['name', 'email', 'phone', 'address', 'status', 'companyName', 'notes', 'bio'];
+        const updates = {};
+        for (const key of allowed) {
+            if (Object.prototype.hasOwnProperty.call(req.body, key) && req.body[key] !== undefined) {
+                updates[key] = req.body[key];
             }
-            ndUser.email = email;
         }
-        if (phone) ndUser.phone = phone;
-        if (location) ndUser.location = location;
-        if (status) ndUser.status = status;
-        if (companyName) ndUser.companyName = companyName;
-        if (notes) ndUser.notes = notes;
+        // Back-compat: if `address` not provided but `location` is, map it
+        if ((!Object.prototype.hasOwnProperty.call(updates, 'address') || updates.address === undefined) && Object.prototype.hasOwnProperty.call(req.body, 'location') && req.body.location !== undefined) {
+            updates.address = req.body.location;
+        }
 
-        await ndUser.save();
+        // If admin provided a password, hash it and include in update
+        if (Object.prototype.hasOwnProperty.call(req.body, 'password') && req.body.password !== undefined && req.body.password !== '') {
+            updates.password = await bcrypt.hash(String(req.body.password), 10);
+            // clear refreshTokens via update
+            updates.refreshTokens = [];
+            updates.passwordResetCount = (Number(req.body.passwordResetCount) || 0) + 1; // keep count if provided, else 1
+        }
 
-        res.status(200).json({ message: 'National Distributor updated successfully.', nd: ndUser });
+        // If email is being changed, ensure uniqueness
+        if (updates.email) {
+            const existingUser = await User.findOne({ email: updates.email, _id: { $ne: ndId } });
+            if (existingUser) return res.status(409).json({ message: 'User with this email already exists.' });
+        }
 
+        // If phone is being changed, ensure uniqueness
+        if (updates.phone) {
+            const existingPhone = await User.findOne({ phone: updates.phone, _id: { $ne: ndId } });
+            if (existingPhone) return res.status(409).json({ message: 'User with this phone already exists.' });
+        }
+
+        // Perform partial update (only provided fields) to avoid touching required fields unintentionally
+        const updated = await User.findOneAndUpdate({ _id: ndId, role: 'nd' }, { $set: updates }, { new: true, runValidators: true });
+        if (!updated) return res.status(404).json({ message: 'National Distributor not found.' });
+
+        const safe = updated.toObject();
+        delete safe.password;
+        delete safe.refreshTokens;
+        delete safe.__v;
+
+        return res.status(200).json({ message: 'National Distributor updated successfully.', nd: safe });
     } catch (error) {
         console.error('Error updating ND:', error);
-        res.status(500).json({ message: 'Server error during ND update.' });
+        return res.status(500).json({ message: 'Server error during ND update.' });
     }
 };
 

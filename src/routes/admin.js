@@ -41,6 +41,9 @@ router.get('/key-validity-timeline', authenticateToken, authorizeRole(['admin'])
 // GET /admin/nd-list
 router.get('/nd-list', authenticateToken, authorizeRole(['admin']), adminController.getNdList);
 
+// GET /admin/admin-list-paginated
+router.get('/admin-list-paginated', authenticateToken, authorizeRole(['admin']), adminController.getAdminListPaginated);
+
 // GET /admin/nd-stats
 router.get('/nd-stats', authenticateToken, authorizeRole(['admin']), adminController.getNdStats);
 
@@ -58,6 +61,18 @@ router.get('/key-transfer-logs/export', authenticateToken, authorizeRole(['admin
 
 // PATCH /admin/nd/:ndId - Edit ND
 router.patch('/nd/:ndId', authenticateToken, authorizeRole(['admin']), adminController.editNd);
+
+// PATCH /admin/ss/:id - Edit SS by admin
+router.patch('/ss/:id', authenticateToken, authorizeRole(['admin']), adminController.editSs);
+
+// PATCH /admin/db/:id - Edit DB by admin
+router.patch('/db/:id', authenticateToken, authorizeRole(['admin']), adminController.editDb);
+
+// PATCH /admin/retailer/:id - Edit Retailer by admin
+router.patch('/retailer/:id', authenticateToken, authorizeRole(['admin']), adminController.editRetailer);
+
+// PATCH /admin/parent/:id - Edit Parent by admin
+router.patch('/parent/:id', authenticateToken, authorizeRole(['admin']), adminController.editParent);
 
 // PATCH /admin/nd/deactivate/:ndId - Deactivate ND
 router.patch('/nd/deactivate/:ndId', authenticateToken, authorizeRole(['admin']), adminController.deactivateNd);
@@ -77,7 +92,14 @@ router.patch('/profile', authenticateToken, authorizeRole(['admin']), adminContr
 // PATCH /admin/change-password
 router.patch('/change-password', authenticateToken, authorizeRole(['admin']), adminController.changePassword);
 
+// Admin management: edit other admins and change their password
+router.patch('/admin/:id', authenticateToken, authorizeRole(['admin']), adminController.editAdmin);
+router.patch('/admin/:id/change-password', authenticateToken, authorizeRole(['admin']), adminController.adminChangePassword);
+
 // GET /admin/last-key-generation
 router.get('/last-key-generation', authenticateToken, authorizeRole(['admin']), adminController.getLastKeyGeneration);
+
+// POST /admin/reset-password/:id - Admin-triggered password reset (returns plaintext once)
+router.post('/reset-password/:id', authenticateToken, authorizeRole(['admin']), adminController.resetUserPasswordByAdmin);
 
 module.exports = router;
