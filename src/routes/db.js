@@ -21,6 +21,9 @@ router.post('/retailers', authenticateToken, authorizeRole(['db']), dbController
 // Update Retailer
 router.put('/retailers/:id', authenticateToken, authorizeRole(['db']), dbController.updateRetailer);
 
+// POST /db/retailers/:id/change-password
+router.post('/retailers/:id/change-password', authenticateToken, authorizeRole(['db']), dbController.changeRetailerPassword);
+
 // Delete Retailer
 router.delete('/retailers/:id', authenticateToken, authorizeRole(['db']), dbController.deleteRetailer);
 

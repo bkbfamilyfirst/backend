@@ -3,7 +3,7 @@ const User = require('../models/User');
 // const Parent = require('../models/Parent.js'); // Parent model removed. Use User model with role: 'parent'.
 const KeyTransferLog = require('../models/KeyTransferLog');
 const { generateCsv } = require('../utils/csv');
-const bcrypt = require('bcrypt');
+const { validatePassword, hashPassword } = require('../utils/password');
 const { validationResult } = require('express-validator');
 // Paginated ND list
 exports.getNdListPaginated = async (req, res) => {
@@ -228,15 +228,15 @@ exports.adminChangePassword = async (req, res) => {
         const { id } = req.params;
         const { password } = req.body || {};
         if (!id) return res.status(400).json({ message: 'Admin id is required' });
-        if (!password || typeof password !== 'string' || password.length < 6) {
-            return res.status(400).json({ message: 'A valid password (min 6 characters) must be provided in the request body.' });
-        }
+        // Validate password using centralized helper
+        const { valid, message } = validatePassword(password);
+        if (!valid) return res.status(400).json({ message });
 
         const adminUser = await User.findOne({ _id: id, role: 'admin' });
         if (!adminUser) return res.status(404).json({ message: 'Admin user not found.' });
 
-        const hashed = await bcrypt.hash(String(password), 10);
-        adminUser.password = hashed;
+    const hashed = await hashPassword(String(password));
+    adminUser.password = hashed;
         adminUser.refreshTokens = [];
         adminUser.passwordResetCount = (adminUser.passwordResetCount || 0) + 1;
         await adminUser.save();
@@ -803,17 +803,16 @@ exports.resetUserPasswordByAdmin = async (req, res) => {
         if (!userId) return res.status(400).json({ message: 'User id is required' });
 
         const { password } = req.body || {};
-        if (!password || typeof password !== 'string' || password.length < 6) {
-            return res.status(400).json({ message: 'A valid password (min 6 characters) must be provided in the request body.' });
-        }
+        // Validate password using centralized helper
+        const { valid: valid2, message: message2 } = validatePassword(password);
+        if (!valid2) return res.status(400).json({ message: message2 });
 
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        // Hash and save provided password
-        const saltRounds = 10;
-        const hashed = await bcrypt.hash(String(password), saltRounds);
-        user.password = hashed;
+    // Hash and save provided password using helper
+    const hashed = await hashPassword(String(password));
+    user.password = hashed;
         // Clear refresh tokens to invalidate existing sessions
         if (user.refreshTokens) user.refreshTokens = [];
         user.passwordResetCount = (user.passwordResetCount || 0) + 1;
@@ -1224,8 +1223,11 @@ exports.addNd = async (req, res) => {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Only ${availableUnassignedKeysCount} Unassigned keys available in the system.` });
         }
 
-        // Hash the provided password
-        const hashedPassword = await bcrypt.hash(password, 10);
+    // Validate and hash the provided password
+    const { valid: ndValid, message: ndMessage } = validatePassword(password);
+    if (!ndValid) return res.status(400).json({ message: ndMessage });
+
+    const hashedPassword = await hashPassword(password);
 
         const newNd = new User({
             name,
@@ -1330,7 +1332,9 @@ async function adminUpdateUserByRole(req, res, expectedRole) {
         // Password change (admin can set a new password) -> hash & clear refresh tokens, increment counter
         let willIncrementPasswordCount = false;
         if (Object.prototype.hasOwnProperty.call(updates, 'password') && updates.password !== undefined && updates.password !== '') {
-            const hashed = await bcrypt.hash(String(updates.password), 10);
+            const { valid: updValid, message: updMessage } = validatePassword(updates.password);
+            if (!updValid) return res.status(400).json({ message: updMessage });
+            const hashed = await hashPassword(String(updates.password));
             set.password = hashed;
             set.refreshTokens = [];
             willIncrementPasswordCount = true;

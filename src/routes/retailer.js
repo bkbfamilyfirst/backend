@@ -26,6 +26,14 @@ router.get('/owned-keys', authenticateToken, authorizeRole(['retailer']), retail
 // GET /retailer/activation-history
 router.get('/activation-history', authenticateToken, authorizeRole(['retailer']), retailerController.getActivationHistory);
 
+// POST /retailer/parents/:id/change-password
+router.post('/parents/:id/change-password', authenticateToken, authorizeRole(['retailer']), retailerController.changeParentPassword);
+
+// Key requests management
+router.get('/key-requests', authenticateToken, authorizeRole(['retailer']), retailerController.listKeyRequests);
+router.patch('/key-requests/:id/approve', authenticateToken, authorizeRole(['retailer']), retailerController.approveKeyRequest);
+router.patch('/key-requests/:id/deny', authenticateToken, authorizeRole(['retailer']), retailerController.denyKeyRequest);
+
 // GET /retailer/key-info
 router.get('/key-info', authenticateToken, authorizeRole(['retailer']), retailerController.getKeyInfo);
 

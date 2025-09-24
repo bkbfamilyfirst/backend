@@ -1,3 +1,12 @@
+const User = require('../models/User');
+const Key = require('../models/Key');
+const { validatePassword, hashPassword } = require('../utils/password');
+const jwt = require('jsonwebtoken');
+const Device = require('../models/Device');
+const Child = require('../models/Child');
+const KeyRequest = require('../models/KeyRequest');
+const Notification = require('../models/Notification');
+
 // GET /parent/profile
 exports.getParentProfile = async (req, res) => {
     try {
@@ -23,10 +32,6 @@ exports.getParentProfile = async (req, res) => {
         res.status(500).json({ message: 'Server error during profile fetch.' });
     }
 };
-const User = require('../models/User');
-const Key = require('../models/Key');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 
 const generateAccessToken = (user) => {
     return jwt.sign({ id: user._id, role: user.role }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
@@ -36,8 +41,7 @@ const generateRefreshToken = (user) => {
     return jwt.sign({ id: user._id, role: user.role }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
 };
 
-// Helper to find device and verify ownership (for parent-related actions)
-const Device = require('../models/Device');
+
 const findDeviceAndVerifyParent = async (deviceId, parentId) => {
     const device = await Device.findById(deviceId);
     if (!device) {
@@ -53,7 +57,8 @@ const findDeviceAndVerifyParent = async (deviceId, parentId) => {
 
 // POST /parent/create
 exports.createParent = async (req, res) => {
-    const { name, phone, email, deviceImei, assignedKey, role } = req.body;
+    // Prefer `address` if provided (back-compat not required here, but keep pattern)
+    const { name, phone, email, deviceImei, assignedKey, address, role } = req.body;
     if (!name || !phone || !email || !deviceImei || !assignedKey) {
         return res.status(400).json({ message: 'All fields are required.' });
     }
@@ -80,7 +85,10 @@ exports.createParent = async (req, res) => {
         if (!password) {
             password = Math.random().toString(36).slice(-8); // Generate random 8-char password
         }
-        const hashedPassword = await bcrypt.hash(password, 10);
+        // Validate provided password when present
+        const passCheck = validatePassword(password);
+        if (!passCheck.valid) return res.status(400).json({ message: passCheck.message });
+        const hashedPassword = await hashPassword(password);
         // Create parent as User with role 'parent'
         const parent = new User({
             name,
@@ -92,6 +100,7 @@ exports.createParent = async (req, res) => {
             assignedKey,
             createdBy: req.user._id,
         });
+        if (address) parent.address = address;
         await parent.save();
         // Assign key
         key.isAssigned = true;
@@ -107,8 +116,7 @@ exports.createParent = async (req, res) => {
                 email: parent.email,
                 deviceImei: parent.deviceImei,
                 assignedKey: parent.assignedKey,
-            },
-            password: req.body.password ? undefined : password // Only return if auto-generated
+            }
         });
     } catch (error) {
         console.error('Error creating parent:', error);
@@ -116,7 +124,6 @@ exports.createParent = async (req, res) => {
     }
 };
         
-
 // GET /parent/list
 exports.listParents = async (req, res) => {
     try {
@@ -127,3 +134,86 @@ exports.listParents = async (req, res) => {
         res.status(500).json({ message: 'Server error during parent listing.' });
     }
 };
+
+// POST /parent/child - create a child for the authenticated parent
+exports.createChild = async (req, res) => {
+    try {
+        const parentId = req.user && req.user._id;
+        if (!parentId) return res.status(401).json({ message: 'Authentication required.' });
+
+        // Ensure caller is a parent and fetch their record
+        const parent = await User.findOne({ _id: parentId, role: 'parent' });
+        if (!parent) return res.status(404).json({ message: 'Parent not found.' });
+
+        // Check whether parent has an assigned activation key
+        if (!parent.assignedKey) {
+            return res.status(403).json({ message: 'No activation key found. Please request an activation key from your retailer to register a child.' });
+        }
+
+        // Verify the key exists and is assigned to this parent
+        const keyRecord = await Key.findOne({ key: parent.assignedKey });
+        if (!keyRecord || String(keyRecord.assignedTo) !== String(parent._id)) {
+            return res.status(403).json({ message: 'Your activation key is missing or invalid. Please contact your retailer to obtain a valid key.' });
+        }
+
+        const { name, age, deviceImei } = req.body || {};
+        if (!name || age === undefined) {
+            return res.status(400).json({ message: 'Child name and age are required.' });
+        }
+
+        // If deviceImei provided, ensure uniqueness
+        if (deviceImei) {
+            const existing = await Child.findOne({ deviceImei });
+            if (existing) return res.status(409).json({ message: 'Device IMEI already registered to another child.' });
+        }
+
+        const child = new Child({ name, age, deviceImei: deviceImei || undefined, parentId: parent._id });
+        await child.save();
+
+        // Increment parent's usedKeys counter (if tracking usage)
+        await User.updateOne({ _id: parent._id }, { $inc: { usedKeys: 1 } });
+
+        return res.status(201).json({
+            message: 'Child created successfully.',
+            child: {
+                id: child._id,
+                name: child.name,
+                age: child.age,
+                deviceImei: child.deviceImei,
+                parentId: child.parentId
+            }
+        });
+    } catch (error) {
+        console.error('Error creating child:', error);
+        return res.status(500).json({ message: 'Server error during child creation.' });
+    }
+};
+
+// POST /parent/request-key - parent requests a key (optionally target a retailer)
+exports.requestKey = async (req, res) => {
+    try {
+        const parentId = req.user && req.user._id;
+        if (!parentId) return res.status(401).json({ message: 'Authentication required.' });
+
+        const parent = await User.findOne({ _id: parentId, role: 'parent' });
+        if (!parent) return res.status(404).json({ message: 'Parent not found.' });
+
+        const { retailerId, message } = req.body || {};
+
+        // Create key request
+        const kr = new KeyRequest({ fromParent: parent._id, toRetailer: retailerId || undefined, message: message || '' });
+        await kr.save();
+
+        // Notify retailer if provided
+        if (retailerId) {
+            const notif = new Notification({ userId: retailerId, type: 'key_request', message: `New key request from parent ${parent.name}`, meta: { keyRequestId: kr._id, parentId: parent._id } });
+            await notif.save();
+        }
+
+        return res.status(201).json({ message: 'Key request created successfully.', request: kr });
+    } catch (error) {
+        console.error('Error creating key request:', error);
+        return res.status(500).json({ message: 'Server error during key request.' });
+    }
+};
+

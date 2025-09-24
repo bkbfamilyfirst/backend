@@ -24,6 +24,9 @@ router.delete('/ss/:id', authenticateToken, authorizeRole(['nd']), ndController.
 // PUT /nd/ss/:id
 router.put('/ss/:id', authenticateToken, authorizeRole(['nd']), ndController.updateSs);
 
+// POST /nd/ss/:id/change-password
+router.post('/ss/:id/change-password', authenticateToken, authorizeRole(['nd']), ndController.changeSsPassword);
+
 // GET /nd/profile
 router.get('/profile', authenticateToken, authorizeRole(['nd']), ndController.getNdProfile);
 

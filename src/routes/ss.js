@@ -21,6 +21,9 @@ router.post('/distributors', authenticateToken, authorizeRole(['ss']), ssControl
 // Update Distributor
 router.put('/distributors/:id', authenticateToken, authorizeRole(['ss']), ssController.updateDistributor);
 
+// POST /ss/distributors/:id/change-password
+router.post('/distributors/:id/change-password', authenticateToken, authorizeRole(['ss']), ssController.changeDistributorPassword);
+
 // Delete Distributor
 router.delete('/distributors/:id', authenticateToken, authorizeRole(['ss']), ssController.deleteDistributor);
 

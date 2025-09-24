@@ -90,6 +90,8 @@
     app.use('/key', keyRoutes); // Existing key routes
     app.use('/child', childRoutes); // New child routes
     app.use('/retailer', retailerRoutes); // New retailer routes
+    const healthRoutes = require('./routes/health');
+    app.use('/', healthRoutes);
 
     // Basic route for testing
     app.get('/', (req, res) => {

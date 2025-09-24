@@ -302,8 +302,8 @@ const updateSs = async (req, res) => {
             return res.status(400).json({ message: 'Invalid SS ID format.' });
         }
 
-        // Extract updatable fields from request body
-        const { firstName, lastName, phone, companyName, address, status } = req.body;
+    // Extract updatable fields from request body
+    const { firstName, lastName, phone, companyName, address, status, password } = req.body;
 
         // First, verify the SS exists and belongs to this ND
         const existingSs = await User.findOne({ 
@@ -324,6 +324,14 @@ const updateSs = async (req, res) => {
         if (companyName !== undefined) updates.companyName = companyName;
         if (address !== undefined) updates.address = address;
         if (status !== undefined) updates.status = status;
+        // If a password was provided, validate and hash it before saving
+        if (password !== undefined) {
+            if (typeof password !== 'string' || password.length < 6) {
+                return res.status(400).json({ message: 'Password must be a string with at least 6 characters.' });
+            }
+            const hashedPassword = await bcrypt.hash(password, 10);
+            updates.password = hashedPassword;
+        }
 
         // Construct 'name' from 'firstName' and 'lastName' if provided
         if (firstName !== undefined || lastName !== undefined) {
@@ -351,6 +359,37 @@ const updateSs = async (req, res) => {
     } catch (error) {
         console.error('Error updating SS for ND:', error);
         res.status(500).json({ message: 'Server error during SS update.' });
+    }
+};
+
+// POST /nd/ss/:id/change-password
+const changeSsPassword = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const ndUserId = req.user._id;
+        const { newPassword } = req.body;
+
+        if (!id || id === 'undefined' || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ message: 'Invalid SS ID provided.' });
+        }
+
+        const { validatePassword, hashPassword } = require('../utils/password');
+        const check = validatePassword(newPassword);
+        if (!check.valid) return res.status(400).json({ message: check.message });
+
+        // Ensure SS exists and belongs to this ND
+        const ss = await User.findOne({ _id: id, role: 'ss', createdBy: ndUserId });
+        if (!ss) {
+            return res.status(404).json({ message: 'State Supervisor not found or not authorized.' });
+        }
+
+        const hashed = await hashPassword(newPassword);
+        await User.updateOne({ _id: id }, { $set: { password: hashed } });
+
+        res.status(200).json({ message: 'Password updated successfully.' });
+    } catch (error) {
+        console.error('Error changing SS password for ND:', error);
+        res.status(500).json({ message: 'Server error during SS password change.' });
     }
 };
 
@@ -545,6 +584,7 @@ module.exports = {
     getReportsSummary,
     deleteSs,
     updateSs,
+    changeSsPassword,
     getNdProfile,
     updateNdProfile,
     addSs,

@@ -115,7 +115,7 @@ const getDashboardSummary = async (req, res) => {
 // GET /ss/distributors
 const getDistributorList = async (req, res) => {
     try {
-        const distributors = await User.find({ role: 'db', createdBy: req.user._id }).select('name email phone role assignedKeys usedKeys createdBy location address status createdAt updatedAt');
+    const distributors = await User.find({ role: 'db', createdBy: req.user._id }).select('name email phone role assignedKeys usedKeys createdBy address status createdAt updatedAt');
         
         const formattedDistributors = distributors.map(db => ({
             _id: db._id,
@@ -127,7 +127,7 @@ const getDistributorList = async (req, res) => {
             usedKeys: db.usedKeys || 0,
             createdBy: db.createdBy,
             status: db.status,
-            location: db.location || db.address || "Not specified",
+            address: db.address || "Not specified",
             createdAt: db.createdAt,
             updatedAt: db.updatedAt
         }));
@@ -229,11 +229,13 @@ const getKeyTransferLogs = async (req, res) => {
 // POST /ss/distributors
 const addDistributor = async (req, res) => {
     try {
-        const { name, username, email, phone, location, status, assignedKeys, password } = req.body;
+        // Prefer `address`; accept legacy `location` for compatibility
+        const { name, username, email, phone, location, address, status, assignedKeys, password } = req.body;
+        const finalAddress = address || location;
         const ssUserId = req.user._id;
 
-        if (!name || !username || !email || !phone || !location || !password) {
-            return res.status(400).json({ message: 'Please provide name, username, email, phone, region, and password.' });
+        if (!name || !username || !email || !phone || !finalAddress || !password) {
+            return res.status(400).json({ message: 'Please provide name, username, email, phone, address (or legacy location), and password.' });
         }
 
         // Check if username, email, or phone already exists
@@ -268,7 +270,7 @@ const addDistributor = async (req, res) => {
             password: hashedPassword,
             role: 'db',
             createdBy: ssUserId,
-            address: location, // Map frontend 'location' to backend 'address' field
+            address: finalAddress,
             status: status || 'active',
             assignedKeys: keysToAssign,
             usedKeys: 0,
@@ -281,14 +283,45 @@ const addDistributor = async (req, res) => {
 
         const responseDistributor = newDistributor.toObject();
         delete responseDistributor.password;
-        // Map backend 'address' to frontend 'location' for consistency
-        responseDistributor.location = newDistributor.address || "Not specified";
+    // Provide address field in response
+    responseDistributor.address = newDistributor.address || "Not specified";
 
         res.status(201).json({ message: 'Distributor added successfully.', distributor: responseDistributor, password });
 
     } catch (error) {
         console.error('Error adding new Distributor for SS:', error);
         res.status(500).json({ message: 'Server error during Distributor creation.' });
+    }
+};
+
+// POST /ss/distributors/:id/change-password
+const changeDistributorPassword = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const ssUserId = req.user._id;
+        const { newPassword } = req.body;
+
+        if (!id || id === 'undefined' || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ message: 'Invalid Distributor ID provided.' });
+        }
+
+        const { validatePassword, hashPassword } = require('../utils/password');
+        const check = validatePassword(newPassword);
+        if (!check.valid) return res.status(400).json({ message: check.message });
+
+        // Ensure distributor exists and belongs to this SS
+        const distributor = await User.findOne({ _id: id, role: 'db', createdBy: ssUserId });
+        if (!distributor) {
+            return res.status(404).json({ message: 'Distributor not found or not authorized.' });
+        }
+
+        const hashed = await hashPassword(newPassword);
+        await User.updateOne({ _id: id }, { $set: { password: hashed } });
+
+        res.status(200).json({ message: 'Password updated successfully.' });
+    } catch (error) {
+        console.error('Error changing Distributor password for SS:', error);
+        res.status(500).json({ message: 'Server error during distributor password change.' });
     }
 };
 
@@ -304,11 +337,7 @@ const updateDistributor = async (req, res) => {
             return res.status(404).json({ message: 'Distributor not found or not authorized to update.' });
         }
 
-        // Map frontend 'location' to backend 'address' field if present
-        if (updates.location) {
-            updates.address = updates.location;
-            delete updates.location;
-        }
+        // Expect 'address' in updates (frontend should send address)
 
         delete updates.role;
         delete updates.password;
@@ -319,9 +348,9 @@ const updateDistributor = async (req, res) => {
 
         const updatedDistributor = await User.findByIdAndUpdate(id, { $set: updates }, { new: true, runValidators: true }).select('-password');
 
-        // Map backend 'address' to frontend 'location' for consistency
-        const responseDistributor = updatedDistributor.toObject();
-        responseDistributor.location = updatedDistributor.address || "Not specified";
+    // Map backend 'address' to response address field
+    const responseDistributor = updatedDistributor.toObject();
+    responseDistributor.address = updatedDistributor.address || "Not specified";
 
         res.status(200).json(responseDistributor);
     } catch (error) {
@@ -409,9 +438,9 @@ const getSsProfile = async (req, res) => {
             return res.status(404).json({ message: 'State Supervisor profile not found.' });
         }
 
-        // Map backend 'address' to frontend 'location' for consistency
-        const responseProfile = ssProfile.toObject();
-        responseProfile.location = ssProfile.address || "Not specified";
+    // Provide address field in profile response
+    const responseProfile = ssProfile.toObject();
+    responseProfile.address = ssProfile.address || "Not specified";
 
         res.status(200).json(responseProfile);
     } catch (error) {
@@ -426,11 +455,7 @@ const updateSsProfile = async (req, res) => {
         const updates = req.body;
         const ssUserId = req.user._id;
 
-        // Map frontend 'location' to backend 'address' field if present
-        if (updates.location) {
-            updates.address = updates.location;
-            delete updates.location;
-        }
+        // Expect 'address' in updates (frontend should send address)
 
         delete updates.role;
         delete updates.password;
@@ -445,9 +470,9 @@ const updateSsProfile = async (req, res) => {
             return res.status(404).json({ message: 'State Supervisor profile not found.' });
         }
 
-        // Map backend 'address' to frontend 'location' for consistency
-        const responseProfile = updatedSsProfile.toObject();
-        responseProfile.location = updatedSsProfile.address || "Not specified";
+    // Provide address field in response profile
+    const responseProfile = updatedSsProfile.toObject();
+    responseProfile.address = updatedSsProfile.address || "Not specified";
 
         res.status(200).json(responseProfile);
     } catch (error) {
@@ -467,4 +492,5 @@ module.exports = {
     transferKeysToDb,
     getSsProfile,
     updateSsProfile,
+    changeDistributorPassword,
 };

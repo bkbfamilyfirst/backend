@@ -1,8 +1,9 @@
 const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
-const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 const Key = require('../models/Key');
+// Password helper
+const { validatePassword, hashPassword } = require('../utils/password');
 
 // GET /db/dashboard/summary
 const getDashboardSummary = async (req, res) => {
@@ -209,6 +210,36 @@ const getDashboardSummary = async (req, res) => {
         res.status(500).json({ message: 'Server error during DB dashboard summary retrieval.' });
     }
 };
+// POST /db/retailers/:id/change-password
+const changeRetailerPassword = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const dbUserId = req.user._id;
+        const { newPassword } = req.body;
+
+        if (!id || id === 'undefined' || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ message: 'Invalid Retailer ID provided.' });
+        }
+
+        const { validatePassword, hashPassword } = require('../utils/password');
+        const check = validatePassword(newPassword);
+        if (!check.valid) return res.status(400).json({ message: check.message });
+
+        // Ensure retailer exists and belongs to this DB
+        const retailer = await User.findOne({ _id: id, role: 'retailer', createdBy: dbUserId });
+        if (!retailer) {
+            return res.status(404).json({ message: 'Retailer not found or not authorized.' });
+        }
+
+        const hashed = await hashPassword(newPassword);
+        await User.updateOne({ _id: id }, { $set: { password: hashed } });
+
+        res.status(200).json({ message: 'Password updated successfully.' });
+    } catch (error) {
+        console.error('Error changing Retailer password for DB:', error);
+        res.status(500).json({ message: 'Server error during retailer password change.' });
+    }
+};
 
 // GET /db/dashboard/retailer-performance
 const getActivationSummaryAndTopRetailers = async (req, res) => {
@@ -326,7 +357,7 @@ const getRetailerList = async (req, res) => {
         const dbUserId = req.user._id;
 
         // Use aggregation to ensure all fields are included and get activations in one query
-        const retailersWithActivations = await User.aggregate([
+    const retailersWithActivations = await User.aggregate([
             { $match: { role: 'retailer', createdBy: dbUserId } },
             {
                 $lookup: {
@@ -368,7 +399,8 @@ const getRetailerList = async (req, res) => {
 // POST /db/retailers (Add Retailer)
 const addRetailer = async (req, res) => {
     try {
-        const { name, username, email, phone, address, status, assignedKeys, password } = req.body;
+        // Prefer `address`; accept legacy `location`
+    const { name, username, email, phone, address, status, assignedKeys, password } = req.body;
         const dbUserId = req.user._id;
 
         if (!name || !username || !email || !phone || !address || !password) {
@@ -397,8 +429,10 @@ const addRetailer = async (req, res) => {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Distributor only has ${dbBalanceKeys} available keys.` });
         }
 
-        // Hash the provided password
-        const hashedPassword = await bcrypt.hash(password, 10);
+    // Validate and hash the provided password
+    const passCheck = validatePassword(password);
+    if (!passCheck.valid) return res.status(400).json({ message: passCheck.message });
+    const hashedPassword = await hashPassword(password);
 
         const newRetailer = new User({
             name,
@@ -420,10 +454,11 @@ const addRetailer = async (req, res) => {
         dbUser.usedKeys += keysToAssign;
         await dbUser.save();
 
-        const responseRetailer = newRetailer.toObject();
-        delete responseRetailer.password;
+    const responseRetailer = newRetailer.toObject();
+    delete responseRetailer.password;
 
-        res.status(201).json({ message: 'Retailer added successfully.', retailer: responseRetailer, password });
+    // Do NOT return plaintext password in the response
+    res.status(201).json({ message: 'Retailer added successfully.', retailer: responseRetailer });
 
     } catch (error) {
         console.error('Error adding new Retailer for DB:', error);
@@ -446,6 +481,8 @@ const updateRetailer = async (req, res) => {
         if (!retailer) {
             return res.status(404).json({ message: 'Retailer not found or not authorized to update.' });
         }
+
+        // Expect 'address' in updates (frontend should send address)
 
         delete updates.role;
         delete updates.password;
@@ -1214,4 +1251,5 @@ module.exports = {
     getMovementHistory,
     receiveKeysFromSs,
     distributeKeysToRetailers,
+    changeRetailerPassword,
 };
