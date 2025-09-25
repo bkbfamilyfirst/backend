@@ -15,6 +15,9 @@ router.get('/dashboard/activation-summary', authenticateToken, authorizeRole(['d
 // Get Retailer List (Overview/Directory)
 router.get('/retailers', authenticateToken, authorizeRole(['db']), dbController.getRetailerList);
 
+// GET /db/retailers/stats/cities - Retailer counts grouped by city
+router.get('/retailers/stats/cities', authenticateToken, authorizeRole(['db']), dbController.getRetailerCityStats);
+
 // Add New Retailer
 router.post('/retailers', authenticateToken, authorizeRole(['db']), dbController.addRetailer);
 

@@ -396,6 +396,56 @@ const getRetailerList = async (req, res) => {
     }
 };
 
+// GET /db/retailers/stats/cities
+const getRetailerCityStats = async (req, res) => {
+    try {
+        const dbUserId = req.user._id;
+        const limit = parseInt(req.query.limit, 10) || 10;
+        const minCount = parseInt(req.query.minCount, 10) || 0;
+        const includeOthers = req.query.includeOthers === 'false' ? false : true; // default true
+        // Optionally filter by region/country if provided (expecting address contains these)
+        const regionFilter = req.query.region;
+        const countryFilter = req.query.country;
+
+        // Build match: retailers created by this DB and active
+        const match = { role: 'retailer', createdBy: dbUserId };
+        if (req.query.status) match.status = req.query.status;
+
+        // If region/country supplied, try a case-insensitive substring match on address
+        if (regionFilter) match.address = { $regex: regionFilter, $options: 'i' };
+        if (countryFilter) match.address = { $regex: countryFilter, $options: 'i' };
+
+        // Use city field if present, otherwise fallback to parsing address via $ifNull
+        const agg = [
+            { $match: match },
+            { $project: { city: { $ifNull: ['$city', '$address'] } } },
+            { $group: { _id: { $toLower: { $trim: { input: { $ifNull: ['$city', 'Unknown'] } } } }, count: { $sum: 1 } } },
+            { $project: { city: { $cond: [ { $eq: ['$_id', ''] }, 'Unknown', '$_id' ] }, count: 1, _id: 0 } },
+            { $match: { count: { $gte: minCount } } },
+            { $sort: { count: -1 } }
+        ];
+
+        const grouped = await User.aggregate(agg);
+
+        // Top N and others handling
+        const top = grouped.slice(0, limit);
+        let othersCount = 0;
+        if (includeOthers && grouped.length > limit) {
+            for (let i = limit; i < grouped.length; i++) othersCount += grouped[i].count;
+        }
+
+        return res.json({
+            totalCities: grouped.length,
+            topCities: top.map(c => ({ city: c.city, count: c.count })),
+            others: includeOthers ? { city: 'Others', count: othersCount } : undefined,
+            raw: grouped
+        });
+    } catch (error) {
+        console.error('Error getting retailer city stats:', error);
+        res.status(500).json({ message: 'Server error retrieving retailer city stats.' });
+    }
+};
+
 // POST /db/retailers (Add Retailer)
 const addRetailer = async (req, res) => {
     try {
@@ -1252,4 +1302,5 @@ module.exports = {
     receiveKeysFromSs,
     distributeKeysToRetailers,
     changeRetailerPassword,
+    getRetailerCityStats,
 };

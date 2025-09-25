@@ -40,6 +40,8 @@ const userSchema = new mongoose.Schema({
     },
     companyName: { type: String },
     address: { type: String },
+    // Optional structured city field to support analytics and grouping
+    city: { type: String, index: true },
     status: {
         type: String,
         enum: ['active', 'inactive', 'blocked'],

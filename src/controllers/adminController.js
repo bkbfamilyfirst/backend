@@ -607,7 +607,7 @@ async function buildHierarchyTree(users, parents) {
     return hierarchy;
 }
 
-// POST /admin  
+// POST /admin/generate-keys
 exports.generateKeys = async (req, res) => {
     const { count, keyLength } = req.body;
 
