@@ -38,19 +38,10 @@ exports.getReports = async (req, res) => {
   try {
     const retailerId = req.user.id;
     const period = req.query.period || 'daily';
-    // Get full retailer user doc for all fields
-    const retailerUser = await User.findById(retailerId).select('assignedKeys usedKeys transferredKeys receivedKeys');
-    // Total keys for retailer: use assignedKeys as the main metric
-    const totalKeys = retailerUser?.receivedKeys || 0;
-    // Total assigned keys (from User model)
-    const assignedKeys = retailerUser?.assignedKeys || 0;
-    // Used keys (transferred to parents)
-    const usedKeys = retailerUser?.usedKeys || 0;
-    // Balance = assigned - used
-    const totalBalance = totalKeys - retailerUser?.transferredKeys;
-    // Total transferred (from User model: transferredKeys)
-    const totalTransferred = retailerUser?.transferredKeys || 0;
-    const totalReceived = retailerUser?.receivedKeys || 0;
+    const retailerUser = await User.findById(retailerId).select('transferredKeys receivedKeys');
+    const receivedKeys = retailerUser?.receivedKeys || 0;
+    const transferredKeys = retailerUser?.transferredKeys || 0;
+    const totalBalance = receivedKeys - transferredKeys;
 
     // Period-based activations
     let dateFilter = {};
@@ -82,11 +73,9 @@ exports.getReports = async (req, res) => {
     const totalActiveParents = await User.countDocuments({ createdBy: retailerId, role: 'parent', status: 'active' });
     res.json({
       totalKeys,
-      assignedKeys,
-      usedKeys,
+      receivedKeys,
+      transferredKeys,
       totalBalance,
-      totalTransferred,
-      totalReceived,
       periodActivations,
       totalActiveParents
     });
@@ -98,7 +87,7 @@ exports.getReports = async (req, res) => {
 exports.getDashboardSummary = async (req, res) => {
   try {
     const retailerId = req.user.id;
-    const retailerUser = await User.findById(retailerId).select('assignedKeys usedKeys transferredKeys receivedKeys');
+    const retailerUser = await User.findById(retailerId).select('transferredKeys receivedKeys');
     // Today's activations
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -132,10 +121,8 @@ exports.getDashboardSummary = async (req, res) => {
       totalActivations,
       pendingActivations,
       activeDevices,
-      assignedKeys: retailerUser?.assignedKeys || 0,
-      usedKeys: retailerUser?.usedKeys || 0,
-      transferredKeys: retailerUser?.transferredKeys || 0,
-      receivedKeys: retailerUser?.receivedKeys || 0
+      receivedKeys: retailerUser?.receivedKeys || 0,
+      transferredKeys: retailerUser?.transferredKeys || 0
     });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -217,6 +204,10 @@ exports.approveKeyRequest = async (req, res) => {
             key = await Key.findOne({ key: keyToAssignId, isAssigned: false }).session(session);
           }
           if (!key) throw new Error('Key not found or already assigned.');
+          // Ensure the key is in the retailer's pool (currentOwner matches retailer)
+          if (key.currentOwner && String(key.currentOwner) !== String(retailerId)) {
+            throw new Error('Key is not available in your pool.');
+          }
           key.isAssigned = true;
           key.assignedTo = krSession.fromParent;
           key.assignedAt = new Date();
@@ -224,8 +215,8 @@ exports.approveKeyRequest = async (req, res) => {
           await key.save({ session });
           assignedKey = key;
 
-          // Update stats
-          await User.updateOne({ _id: krSession.fromParent }, { $inc: { receivedKeys: 1, assignedKeys: 1 } }, { session });
+          // Update stats (parent receives, retailer increments transferred)
+          await User.updateOne({ _id: krSession.fromParent }, { $inc: { receivedKeys: 1 } }, { session });
           await User.updateOne({ _id: retailerId }, { $inc: { transferredKeys: 1 } }, { session });
         } else {
           // Atomically pick the oldest unassigned key owned by this retailer
@@ -238,7 +229,7 @@ exports.approveKeyRequest = async (req, res) => {
           assignedKey = key;
 
           // Update parent and retailer stats
-          await User.updateOne({ _id: krSession.fromParent }, { $inc: { receivedKeys: 1, assignedKeys: 1 } }, { session });
+          await User.updateOne({ _id: krSession.fromParent }, { $inc: { receivedKeys: 1 } }, { session });
           await User.updateOne({ _id: retailerId }, { $inc: { transferredKeys: 1 } }, { session });
         }
 
@@ -281,14 +272,15 @@ exports.approveKeyRequest = async (req, res) => {
       try { key = await Key.findOne({ _id: keyToAssignId, isAssigned: false }); } catch(e){}
       if (!key) key = await Key.findOne({ key: keyToAssignId, isAssigned: false });
       if (!key) return res.status(404).json({ message: 'Key not found or already assigned.' });
+      if (key.currentOwner && String(key.currentOwner) !== String(retailerId)) return res.status(400).json({ message: 'Key is not available in your pool.' });
       key.isAssigned = true;
       key.assignedTo = krAtomic.fromParent;
       key.assignedAt = new Date();
       key.currentOwner = krAtomic.fromParent;
       await key.save();
       assignedKey = key;
-      await User.updateOne({ _id: krAtomic.fromParent }, { $inc: { receivedKeys: 1, assignedKeys: 1 } });
-      await User.updateOne({ _id: retailerId }, { $inc: { transferredKeys: 1 } });
+  await User.updateOne({ _id: krAtomic.fromParent }, { $inc: { receivedKeys: 1 } });
+  await User.updateOne({ _id: retailerId }, { $inc: { transferredKeys: 1 } });
     } else {
       const key = await Key.findOneAndUpdate(
         { currentOwner: retailerId, isAssigned: false },
@@ -297,13 +289,13 @@ exports.approveKeyRequest = async (req, res) => {
       );
       if (!key) return res.status(400).json({ message: 'No available keys in your pool to assign. Please add keys or specify a key to assign.' });
       assignedKey = key;
-      await User.updateOne({ _id: krAtomic.fromParent }, { $inc: { receivedKeys: 1, assignedKeys: 1 } });
-      await User.updateOne({ _id: retailerId }, { $inc: { transferredKeys: 1 } });
+  await User.updateOne({ _id: krAtomic.fromParent }, { $inc: { receivedKeys: 1 } });
+  await User.updateOne({ _id: retailerId }, { $inc: { transferredKeys: 1 } });
     }
 
     if (assignedKey) {
       try {
-        const log = new KeyTransferLog({ fromUser: retailerId, toUser: kr.fromParent, count: 1, status: 'completed', type: 'retailer-to-parent', notes: `Assigned key ${assignedKey.key} to parent ${kr.fromParent}` });
+        const log = new KeyTransferLog({ fromUser: retailerId, toUser: krAtomic.fromParent, count: 1, status: 'completed', type: 'retailer-to-parent', notes: `Assigned key ${assignedKey.key} to parent ${krAtomic.fromParent}` });
         await log.save();
       } catch (e) {
         console.error('Failed to write KeyTransferLog:', e);
@@ -428,14 +420,14 @@ exports.createParent = async (req, res) => {
       key.currentOwner = parent._id;
       await key.save();
       console.log('[createParent] Key assigned to parent:', parent._id);
-      // Increment assignedKeys for retailer
+      // Increment transferred keys for retailer
       await User.updateOne(
         { _id: req.user._id },
         { $inc: { transferredKeys: 1 } }
       );
       await User.updateOne(
         { _id: parent._id },
-        { $inc: { receivedKeys: 1, assignedKeys: 1 } }
+        { $inc: { receivedKeys: 1 } }
       );
       console.log('[createParent] Retailer and parent stats updated.');
     }
@@ -498,7 +490,7 @@ exports.getRetailerProfile = async (req, res) => {
     if (!retailer || retailer.role !== 'retailer') {
       return res.status(404).json({ message: 'Retailer not found' });
     }
-    // Add assignedKeys, usedKeys, transferredKeys, receivedKeys to profile response
+    // Add transferredKeys, receivedKeys to profile response
     res.json({
       id: retailer._id,
       name: retailer.name,
@@ -507,8 +499,6 @@ exports.getRetailerProfile = async (req, res) => {
       username: retailer.username,
       address: retailer.address,
       status: retailer.status,
-      assignedKeys: retailer.assignedKeys || 0,
-      usedKeys: retailer.usedKeys || 0,
       transferredKeys: retailer.transferredKeys || 0,
       receivedKeys: retailer.receivedKeys || 0,
       createdAt: retailer.createdAt,
@@ -522,17 +512,15 @@ exports.getRetailerProfile = async (req, res) => {
 exports.getRetailerStats = async (req, res) => {
   try {
     const retailerId = req.user.id;
-    const retailerUser = await User.findById(retailerId).select('transferredKeys receivedKeys assignedKeys usedKeys');
-    // For retailers, totalKeys is assignedKeys
-    const totalKeys = retailerUser?.assignedKeys || 0;
+    const retailerUser = await User.findById(retailerId).select('transferredKeys receivedKeys');
+    // For retailers, totalKeys is receivedKeys
+    const totalKeys = retailerUser?.receivedKeys || 0;
     // Count parents created by this retailer
     const totalParents = await User.countDocuments({ createdBy: retailerId, role: 'parent' });
     res.json({
       totalKeys,
       totalParents,
-      assignedKeys: retailerUser?.assignedKeys || 0,
-      usedKeys: retailerUser?.usedKeys || 0,
-      totalTransfers: retailerUser?.transferredKeys || 0,
+      totalTransferred: retailerUser?.transferredKeys || 0,
       totalReceived: retailerUser?.receivedKeys || 0
     });
   } catch (err) {

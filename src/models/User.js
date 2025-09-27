@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
 
-
 const userSchema = new mongoose.Schema({
     // General fields
     name: { type: String },
@@ -27,8 +26,6 @@ const userSchema = new mongoose.Schema({
         sparse: true // Only for parents
     },
     // For all users
-    assignedKeys: { type: Number, default: 0 },
-    usedKeys: { type: Number, default: 0 },
     transferredKeys: { type: Number, default: 0 }, // Increment when user transfers keys
     // For ND, SS, DB, Retailer roles only (not admin, parent, child)
     receivedKeys: { type: Number, default: 0 }, // Increment when user receives keys

@@ -14,10 +14,9 @@ const getSsList = async (req, res) => {
             phone: ss.phone,
             address: ss.address, // Use address field consistently
             status: ss.status,
-            assignedKeys: ss.assignedKeys || 0,
-            usedKeys: ss.usedKeys || 0,
             receivedKeys: ss.receivedKeys || 0,
-            balance: (ss.assignedKeys || 0) - (ss.usedKeys || 0),
+            transferredKeys: ss.transferredKeys || 0,
+            balance: (ss.receivedKeys || 0) - (ss.transferredKeys || 0),
             createdAt: ss.createdAt,
             updatedAt: ss.updatedAt
         }));
@@ -39,7 +38,7 @@ const getSsStats = async (req, res) => {
         const blocked = await User.countDocuments({ role: 'ss', createdBy: req.user._id, status: 'blocked' });
         const keysAssignedAgg = await User.aggregate([
             { $match: { role: 'ss', createdBy: req.user._id } },
-            { $group: { _id: null, total: { $sum: '$assignedKeys' } } }
+            { $group: { _id: null, total: { $sum: '$receivedKeys' } } }
         ]);
         const totalKeys = keysAssignedAgg[0]?.total || 0;
         // Fetch ND's transferredKeys property
@@ -228,12 +227,12 @@ const getReportsSummary = async (req, res) => {
         const ndUserId = req.user._id;
         const ssIds = await User.find({ role: 'ss', createdBy: ndUserId }).distinct('_id');
 
-        // Current ND's assignedKeys and usedKeys for balance
-        const ndUser = await User.findById(ndUserId).select('assignedKeys usedKeys receivedKeys transferredKeys');
-        const ndAssignedKeys = ndUser?.assignedKeys || 0;
-        const ndUsedKeys = ndUser?.usedKeys || 0;
-        const balanceKeys = ndUser?.receivedKeys - ndUser?.transferredKeys;
-        const transferRate = ndAssignedKeys > 0 ? ((ndUser?.transferredKeys / ndUser?.receivedKeys) * 100).toFixed(2) : 0;
+        // Current ND' receivedKeys and transferredKeys for balance
+        const ndUser = await User.findById(ndUserId).select('receivedKeys transferredKeys');
+        const ndReceivedKeys = ndUser?.receivedKeys || 0;
+        const ndTransferredKeys = ndUser?.transferredKeys || 0;
+        const balanceKeys = ndReceivedKeys - ndTransferredKeys;
+        const transferRate = ndReceivedKeys > 0 ? ((ndTransferredKeys / ndReceivedKeys) * 100).toFixed(2) : 0;
 
         // Total Transferred Keys: Sum of count from KeyTransferLog where fromUser is the current ND user
         const totalTransferredKeysAgg = await KeyTransferLog.aggregate([
@@ -252,10 +251,9 @@ const getReportsSummary = async (req, res) => {
         const parentCount = await User.countDocuments({ role: 'parent', createdBy: { $in: ssIds } });
 
         res.status(200).json({
-            totalReceivedKeys: ndAssignedKeys,
+            totalReceivedKeys: ndReceivedKeys,
             totalTransferredKeys,
-            assignedKeys: ndAssignedKeys,
-            usedKeys: ndUsedKeys,
+            transferredKeys: ndTransferredKeys,
             balanceKeys,
             transferRate: parseFloat(transferRate),
             totalActivations: parentCount,
@@ -448,7 +446,7 @@ const updateNdProfile = async (req, res) => {
 // POST /nd/ss
 const addSs = async (req, res) => {
     try {
-        const { name, username, email, phone, address, status, assignedKeys, password } = req.body;
+        const { name, username, email, phone, address, status, receivedKeys, password } = req.body;
         const ndUserId = req.user._id;
 
         // Basic validation
@@ -469,10 +467,10 @@ const addSs = async (req, res) => {
             return res.status(404).json({ message: 'National Distributor user not found.' });
         }
 
-        const ndAssignedKeys = ndUser.assignedKeys || 0;
-        const ndUsedKeys = ndUser.usedKeys || 0;
-        const ndBalanceKeys = ndAssignedKeys - ndUsedKeys;
-        const keysToAssign = assignedKeys || 0;
+        const ndReceivedKeys = ndUser.receivedKeys || 0;
+        const ndTransferredKeys = ndUser.transferredKeys || 0;
+        const ndBalanceKeys = ndReceivedKeys - ndTransferredKeys;
+        const keysToAssign = receivedKeys || 0;
 
         if (keysToAssign > ndBalanceKeys) {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. ND only has ${ndBalanceKeys} available keys.` });
@@ -491,14 +489,14 @@ const addSs = async (req, res) => {
             createdBy: ndUserId,
             address,
             status: status || 'active',
-            assignedKeys: keysToAssign,
-            usedKeys: 0,
+            receivedKeys: keysToAssign,
+            transferredKeys: 0,
         });
 
         await newSs.save();
 
-        // Update ND's usedKeys and assignedKeys
-        ndUser.usedKeys += keysToAssign;
+        // Update ND's transferredKeys and receivedKeys
+        ndUser.transferredKeys += keysToAssign;
         await ndUser.save();
 
         res.status(201).json({
@@ -512,8 +510,8 @@ const addSs = async (req, res) => {
                 password,
                 address: newSs.address,
                 status: newSs.status,
-                assignedKeys: newSs.assignedKeys,
-                usedKeys: newSs.usedKeys
+                receivedKeys: newSs.receivedKeys,
+                transferredKeys: newSs.transferredKeys
             }
         });
 
@@ -546,8 +544,6 @@ const transferKeysToSs = async (req, res) => {
             { _id: { $in: keyIdsToUpdate } },
             { $set: { currentOwner: ssUser._id } }
         );
-        // Update SS assignedKeys
-        ssUser.assignedKeys += keysToTransfer;
         await ssUser.save();
         // Increment transferredKeys for ND (sender)
         await User.updateOne(

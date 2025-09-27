@@ -1,5 +1,6 @@
 const Key = require('../models/Key');
 const User = require('../models/User');
+const mongoose = require('mongoose');
 // const Parent = require('../models/Parent.js'); // Parent model removed. Use User model with role: 'parent'.
 const KeyTransferLog = require('../models/KeyTransferLog');
 const { generateCsv } = require('../utils/csv');
@@ -31,7 +32,7 @@ exports.getNdListPaginated = async (req, res) => {
             if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
         }
         const sortBy = req.query.sortBy || 'createdAt';
-        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        const allowedSortBy = ['name', 'createdAt', 'receivedKeys', 'transferredKeys'];
         if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
 
@@ -74,7 +75,7 @@ exports.getNdListPaginated = async (req, res) => {
         pipeline.push({ $facet: {
             data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
                 id: '$_id', name: 1, username:1, email:1, phone:1, role:1,
-                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                transferredKeys:1, receivedKeys:1, companyName:1,
                 address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
             }} ],
             totalCount: [ { $count: 'count' } ]
@@ -93,8 +94,6 @@ exports.getNdListPaginated = async (req, res) => {
             email: u.email,
             phone: u.phone,
             role: u.role,
-            assignedKeys: u.assignedKeys || 0,
-            usedKeys: u.usedKeys || 0,
             transferredKeys: u.transferredKeys || 0,
             receivedKeys: u.receivedKeys || 0,
             companyName: u.companyName,
@@ -175,7 +174,7 @@ async function getListPaginatedByRole(req, res, role, allowedSortBy = ['name', '
         pipeline.push({ $facet: {
             data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
                 id: '$_id', name: 1, username:1, email:1, phone:1, role:1,
-                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                transferredKeys:1, receivedKeys:1, companyName:1,
                 address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
             }} ],
             totalCount: [ { $count: 'count' } ]
@@ -193,8 +192,6 @@ async function getListPaginatedByRole(req, res, role, allowedSortBy = ['name', '
             email: u.email,
             phone: u.phone,
             role: u.role,
-            assignedKeys: u.assignedKeys || 0,
-            usedKeys: u.usedKeys || 0,
             transferredKeys: u.transferredKeys || 0,
             receivedKeys: u.receivedKeys || 0,
             companyName: u.companyName,
@@ -279,7 +276,7 @@ exports.getSsListPaginated = async (req, res) => {
             if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
         }
         const sortBy = req.query.sortBy || 'createdAt';
-        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        const allowedSortBy = ['name', 'createdAt', 'receivedKeys', 'transferredKeys'];
         if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
 
@@ -316,7 +313,7 @@ exports.getSsListPaginated = async (req, res) => {
         pipeline.push({ $facet: {
             data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
                 id: '$_id', name: 1, username:1, email:1, phone:1, password:1, role:1,
-                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                transferredKeys:1, receivedKeys:1, companyName:1,
                 address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
             }} ],
             totalCount: [ { $count: 'count' } ]
@@ -333,8 +330,6 @@ exports.getSsListPaginated = async (req, res) => {
             email: u.email,
             phone: u.phone,
             role: u.role,
-            assignedKeys: u.assignedKeys || 0,
-            usedKeys: u.usedKeys || 0,
             transferredKeys: u.transferredKeys || 0,
             receivedKeys: u.receivedKeys || 0,
             companyName: u.companyName,
@@ -382,7 +377,7 @@ exports.getDbListPaginated = async (req, res) => {
             if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
         }
         const sortBy = req.query.sortBy || 'createdAt';
-        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        const allowedSortBy = ['name', 'createdAt', 'receivedKeys', 'transferredKeys'];
         if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
 
@@ -419,7 +414,7 @@ exports.getDbListPaginated = async (req, res) => {
         pipeline.push({ $facet: {
             data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
                 id: '$_id', name: 1, username:1, email:1, phone:1, password:1, role:1,
-                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                transferredKeys:1, receivedKeys:1, companyName:1,
                 address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
             }} ],
             totalCount: [ { $count: 'count' } ]
@@ -435,10 +430,7 @@ exports.getDbListPaginated = async (req, res) => {
             username: u.username,
             email: u.email,
             phone: u.phone,
-            password: u.password,
             role: u.role,
-            assignedKeys: u.assignedKeys || 0,
-            usedKeys: u.usedKeys || 0,
             transferredKeys: u.transferredKeys || 0,
             receivedKeys: u.receivedKeys || 0,
             companyName: u.companyName,
@@ -486,7 +478,7 @@ exports.getRetailerListPaginated = async (req, res) => {
             if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid endDate format' });
         }
         const sortBy = req.query.sortBy || 'createdAt';
-        const allowedSortBy = ['name', 'createdAt', 'assignedKeys', 'receivedKeys'];
+        const allowedSortBy = ['name', 'createdAt', 'receivedKeys', 'transferredKeys'];
         if (!allowedSortBy.includes(sortBy)) return res.status(400).json({ error: 'Invalid sortBy value' });
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1; // default desc
 
@@ -523,7 +515,7 @@ exports.getRetailerListPaginated = async (req, res) => {
         pipeline.push({ $facet: {
             data: [ sortStage, { $skip: skip }, { $limit: limit }, { $project: {
                 id: '$_id', name: 1, username:1, email:1, phone:1, password:1, role:1,
-                assignedKeys:1, usedKeys:1, transferredKeys:1, receivedKeys:1, companyName:1,
+                transferredKeys:1, receivedKeys:1, companyName:1,
                 address:1, status:1, bio:1, notes:1, createdBy:1, lastLogin:1, createdAt:1, updatedAt:1
             }} ],
             totalCount: [ { $count: 'count' } ]
@@ -539,10 +531,7 @@ exports.getRetailerListPaginated = async (req, res) => {
             username: u.username,
             email: u.email,
             phone: u.phone,
-            password: u.password,
             role: u.role,
-            assignedKeys: u.assignedKeys || 0,
-            usedKeys: u.usedKeys || 0,
             transferredKeys: u.transferredKeys || 0,
             receivedKeys: u.receivedKeys || 0,
             companyName: u.companyName,
@@ -924,11 +913,10 @@ exports.getNdList = async (req, res) => {
             name: nd.name,
             email: nd.email,
             phone: nd.phone,
-            location: nd.address,
+            address: nd.address,
             status: nd.status,
-            assignedKeys: nd.assignedKeys,
-            usedKeys: nd.usedKeys,
-            balance: nd.assignedKeys - nd.usedKeys,
+            transferredKeys: nd.transferredKeys,
+            balance: nd.receivedKeys - nd.transferredKeys,
             createdAt: nd.createdAt,
             updatedAt: nd.updatedAt
         }));
@@ -946,21 +934,21 @@ exports.getNdStats = async (req, res) => {
         const active = await User.countDocuments({ role: 'nd', status: 'active' });
         const inactive = await User.countDocuments({ role: 'nd', status: 'inactive' });
         const blocked = await User.countDocuments({ role: 'nd', status: 'blocked' });
-        const keysAssigned = await User.aggregate([
+        const keysTransferred = await User.aggregate([
             { $match: { role: 'nd' } },
-            { $group: { _id: null, total: { $sum: '$assignedKeys' }, used: { $sum: '$usedKeys' } } }
+            { $group: { _id: null, total: { $sum: '$receivedKeys' }, used: { $sum: '$transferredKeys' } } }
         ]);
-        const totalAssignedKeys = keysAssigned[0]?.total || 0;
-        const totalUsedKeys = keysAssigned[0]?.used || 0;
-        const balanceKeys = totalAssignedKeys - totalUsedKeys;
+        const totalReceivedKeys = keysTransferred[0]?.total || 0;
+        const totalTransferredKeys = keysTransferred[0]?.used || 0;
+        const balanceKeys = totalReceivedKeys - totalTransferredKeys;
 
         res.status(200).json({
             total,
             active,
             inactive,
             blocked,
-            totalAssignedKeys,
-            totalUsedKeys,
+            totalReceivedKeys,
+            totalTransferredKeys,
             balanceKeys
         });
     } catch (error) {
@@ -1151,7 +1139,6 @@ exports.transferKeysToNd = async (req, res) => {
             return res.status(404).json({ message: 'National Distributor not found.' });
         }
 
-
         // Only transfer keys where currentOwner is the admin user
         const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
         if (keysToTransfer > availableUnassignedKeysCount) {
@@ -1162,36 +1149,62 @@ exports.transferKeysToNd = async (req, res) => {
         const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
         const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
 
-        await Key.updateMany(
-            { _id: { $in: keyIdsToUpdate } },
-            { $set: { currentOwner: ndUser._id } }
-        );
+        // Use a session to ensure all operations succeed or fail together
+        const session = await mongoose.startSession();
+        session.startTransaction();
 
-        // Update the ND's assignedKeys
-        ndUser.assignedKeys += keysToTransfer;
-        await ndUser.save();
-        // Increment transferredKeys for admin (sender)
-        await User.updateOne(
-            { _id: req.user._id },
-            { $inc: { transferredKeys: keysToTransfer } }
-        );
-        // Increment receivedKeys for ND (receiver)
-        await User.updateOne(
-            { _id: ndUser._id },
-            { $inc: { receivedKeys: keysToTransfer } }
-        );
-        // Create a KeyTransferLog entry
-        const newKeyTransferLog = new KeyTransferLog({
-            fromUser: req.user._id, // Admin is the sender
-            toUser: ndId,
-            count: keysToTransfer,
-            status: 'completed',
-            type: 'bulk',
-            notes: `Bulk transferred ${keysToTransfer} keys from Admin to ND: ${ndUser.name}`
-        });
-        await newKeyTransferLog.save();
-        res.status(200).json({ message: 'Keys transferred to National Distributor successfully.' });
+        try {
+            // Update key ownership
+            await Key.updateMany(
+                { _id: { $in: keyIdsToUpdate } },
+                { $set: { currentOwner: ndUser._id } },
+                { session }
+            );
 
+            // Increment transferredKeys for admin (sender)
+            const adminResult = await User.updateOne(
+                { _id: req.user._id },
+                { $inc: { transferredKeys: keysToTransfer } },
+                { session }
+            );
+            
+            // Increment receivedKeys for ND (receiver)
+            const ndResult = await User.updateOne(
+                { _id: ndUser._id },
+                { $inc: { receivedKeys: keysToTransfer } },
+                { session }
+            );
+
+            // Create a KeyTransferLog entry
+            const newKeyTransferLog = new KeyTransferLog({
+                fromUser: req.user._id,
+                toUser: ndId,
+                count: keysToTransfer,
+                status: 'completed',
+                type: 'bulk',
+                notes: `Bulk transferred ${keysToTransfer} keys from Admin to ND: ${ndUser.name}`
+            });
+            await newKeyTransferLog.save({ session });
+
+            // Check if updates were successful
+            if (adminResult.modifiedCount !== 1 || ndResult.modifiedCount !== 1) {
+                throw new Error('Failed to update user counters');
+            }
+
+            await session.commitTransaction();
+            res.status(200).json({ 
+                message: 'Keys transferred to National Distributor successfully.',
+                adminUpdated: adminResult.modifiedCount === 1,
+                ndUpdated: ndResult.modifiedCount === 1,
+                keysUpdated: keyIdsToUpdate.length
+            });
+        } catch (error) {
+            await session.abortTransaction();
+            console.error('Transaction error during key transfer:', error);
+            res.status(500).json({ message: 'Transaction error during key transfer.' });
+        } finally {
+            session.endSession();
+        }
     } catch (error) {
         console.error('Error transferring keys to ND:', error);
         res.status(500).json({ message: 'Server error during key transfer.' });
@@ -1201,7 +1214,7 @@ exports.transferKeysToNd = async (req, res) => {
 // POST /admin/nd
 exports.addNd = async (req, res) => {
     try {
-    const { name, username, email, phone, address, status, assignedKeys, companyName, notes, password } = req.body;
+    const { name, username, email, phone, address, status, receivedKeys, companyName, notes, password } = req.body;
         const adminUserId = req.user._id;
 
         if (!name || !username || !email || !phone || !address || !companyName || !password) {
@@ -1217,7 +1230,7 @@ exports.addNd = async (req, res) => {
 
         // Fetch available unassigned keys in the global pool
         const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false });
-        const keysToAssign = assignedKeys || 0;
+        const keysToAssign = receivedKeys || 0;
 
         if (keysToAssign > availableUnassignedKeysCount) {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Only ${availableUnassignedKeysCount} Unassigned keys available in the system.` });
@@ -1240,8 +1253,8 @@ exports.addNd = async (req, res) => {
             address: address,
             companyName,
             status: status || 'active',
-            assignedKeys: keysToAssign,
-            usedKeys: 0,
+            receivedKeys: keysToAssign,
+            transferredKeys: 0,
             notes: notes || '',
         });
 
@@ -1387,7 +1400,7 @@ exports.editNd = async (req, res) => {
         if (!ndId) return res.status(400).json({ message: 'ndId is required' });
 
         // Collect allowed fields from body (only set if present)
-        // Prefer `address` field; accept legacy `location` and map it to `address` for compatibility
+        // Prefer `address` field; accept legacy `address` and map it to `address` for compatibility
         const allowed = ['name', 'email', 'phone', 'address', 'status', 'companyName', 'notes', 'bio'];
         const updates = {};
         for (const key of allowed) {
@@ -1395,9 +1408,9 @@ exports.editNd = async (req, res) => {
                 updates[key] = req.body[key];
             }
         }
-        // Back-compat: if `address` not provided but `location` is, map it
-        if ((!Object.prototype.hasOwnProperty.call(updates, 'address') || updates.address === undefined) && Object.prototype.hasOwnProperty.call(req.body, 'location') && req.body.location !== undefined) {
-            updates.address = req.body.location;
+        // Back-compat: if `address` not provided but `address` is, map it
+        if ((!Object.prototype.hasOwnProperty.call(updates, 'address') || updates.address === undefined) && Object.prototype.hasOwnProperty.call(req.body, 'address') && req.body.address !== undefined) {
+            updates.address = req.body.address;
         }
 
         // If admin provided a password, hash it and include in update
@@ -1518,10 +1531,9 @@ exports.getAdminProfile = async (req, res) => {
             address: adminUser.address || '', // Map 'address' directly
             bio: adminUser.bio || '',
             role: adminUser.role,
-            assignedKeys: adminUser.assignedKeys,
-            usedKeys: adminUser.usedKeys,
-            totalGenerated: adminUser.totalGenerated || 0,
+            receivedKeys: adminUser.receivedKeys,
             transferredKeys: adminUser.transferredKeys || 0,
+            totalGenerated: adminUser.totalGenerated || 0,
             createdAt: adminUser.createdAt,
             updatedAt: adminUser.updatedAt,
             lastLogin: adminUser.lastLogin,
@@ -1578,8 +1590,8 @@ exports.editAdminProfile = async (req, res) => {
             address: adminUser.address,
             bio: adminUser.bio,
             role: adminUser.role,
-            assignedKeys: adminUser.assignedKeys,
-            usedKeys: adminUser.usedKeys,
+            receivedKeys: adminUser.receivedKeys,
+            transferredKeys: adminUser.transferredKeys || 0,
             createdAt: adminUser.createdAt,
             updatedAt: adminUser.updatedAt,
             lastLogin: adminUser.lastLogin,

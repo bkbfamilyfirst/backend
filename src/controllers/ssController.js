@@ -8,15 +8,15 @@ const getDashboardSummary = async (req, res) => {
     try {
         const ssUserId = req.user._id;
 
-        const ssUser = await User.findById(ssUserId).select('assignedKeys usedKeys');
+        const ssUser = await User.findById(ssUserId).select('receivedKeys transferredKeys');
         if (!ssUser) {
             return res.status(404).json({ message: 'State Supervisor user not found.' });
         }
 
-        const totalReceivedKeys = ssUser.assignedKeys || 0;
-        const allocatedKeys = ssUser.usedKeys || 0;
-        const balanceKeys = totalReceivedKeys - allocatedKeys;
-        const allocationStatus = totalReceivedKeys > 0 ? ((allocatedKeys / totalReceivedKeys) * 100).toFixed(2) : 0;
+        const totalReceivedKeys = ssUser.receivedKeys || 0;
+        const totalTransferredKeys = ssUser.transferredKeys || 0;
+        const balanceKeys = totalReceivedKeys - totalTransferredKeys;
+        const transferStatus = totalReceivedKeys > 0 ? ((totalTransferredKeys / totalReceivedKeys) * 100).toFixed(2) : 0;
 
         const now = new Date();
         const todayStart = new Date(now.setHours(0, 0, 0, 0));
@@ -63,14 +63,14 @@ const getDashboardSummary = async (req, res) => {
         const dbUsersCreatedBySs = await User.find({ role: 'db', createdBy: ssUserId }).distinct('_id');
         const totalActiveRetailers = await User.countDocuments({ role: 'retailer', createdBy: { $in: dbUsersCreatedBySs }, status: 'active' });
 
-        const growthThisMonth = '8.3%';
+        // const growthThisMonth = '8.3%';
 
-        const regionalDistribution = {
-            north: 0,
-            south: 0,
-            east: 0,
-            west: 0,
-        };
+        // const regionalDistribution = {
+        //     north: 0,
+        //     south: 0,
+        //     east: 0,
+        //     west: 0,
+        // };
 
         const retailerIdsUnderSs = await User.find({ role: 'retailer', createdBy: { $in: dbUsersCreatedBySs } }).distinct('_id');
 
@@ -92,13 +92,13 @@ const getDashboardSummary = async (req, res) => {
                 lastBatch: lastBatchDetails
             },
             balanceKeys: balanceKeys,
-            allocationStatus: parseFloat(allocationStatus),
-            allocated: allocatedKeys,
+            transferStatus: parseFloat(transferStatus),
+            transferredKeys: totalTransferredKeys,
             available: balanceKeys,
             retailerCount: {
                 totalActiveRetailers,
-                growthThisMonth,
-                regionalDistribution,
+                // growthThisMonth,
+                // regionalDistribution,
             },
             dailyActivations: {
                 today: todayActivations,
@@ -115,7 +115,7 @@ const getDashboardSummary = async (req, res) => {
 // GET /ss/distributors
 const getDistributorList = async (req, res) => {
     try {
-    const distributors = await User.find({ role: 'db', createdBy: req.user._id }).select('name email phone role assignedKeys usedKeys createdBy address status createdAt updatedAt');
+    const distributors = await User.find({ role: 'db', createdBy: req.user._id }).select('name email phone role receivedKeys transferredKeys createdBy address status createdAt updatedAt');
         
         const formattedDistributors = distributors.map(db => ({
             _id: db._id,
@@ -123,8 +123,8 @@ const getDistributorList = async (req, res) => {
             email: db.email,
             phone: db.phone,
             role: db.role,
-            assignedKeys: db.assignedKeys || 0,
-            usedKeys: db.usedKeys || 0,
+            receivedKeys: db.receivedKeys || 0,
+            transferredKeys: db.transferredKeys || 0,
             createdBy: db.createdBy,
             status: db.status,
             address: db.address || "Not specified",
@@ -145,11 +145,7 @@ const getDistributorStats = async (req, res) => {
         const total = await User.countDocuments({ role: 'db', createdBy: req.user._id });
         const active = await User.countDocuments({ role: 'db', createdBy: req.user._id, status: 'active' });
         const inactive = await User.countDocuments({ role: 'db', createdBy: req.user._id, status: 'inactive' });
-        const keysAssignedAgg = await User.aggregate([
-            { $match: { role: 'db', createdBy: req.user._id } },
-            { $group: { _id: null, total: { $sum: '$assignedKeys' } } }
-        ]);
-        const totalKeys = keysAssignedAgg[0]?.total || 0;
+
         // Aggregate transferredKeys and receivedKeys for DB users
         const transferredKeysAgg = await User.aggregate([
             { $match: { role: 'db', createdBy: req.user._id } },
@@ -161,7 +157,7 @@ const getDistributorStats = async (req, res) => {
         ]);
         const totalTransferredKeys = transferredKeysAgg[0]?.total || 0;
         const totalReceivedKeys = receivedKeysAgg[0]?.total || 0;
-        res.status(200).json({ total, active, inactive, totalKeys, totalTransferredKeys, totalReceivedKeys });
+        res.status(200).json({ total, active, inactive, totalTransferredKeys, totalReceivedKeys });
     } catch (error) {
         console.error('Error getting Distributor stats for SS:', error);
         res.status(500).json({ message: 'Server error during Distributor stats retrieval.' });
@@ -230,7 +226,7 @@ const getKeyTransferLogs = async (req, res) => {
 const addDistributor = async (req, res) => {
     try {
         // Prefer `address`; accept legacy `location` for compatibility
-        const { name, username, email, phone, location, address, status, assignedKeys, password } = req.body;
+        const { name, username, email, phone, location, address, status, receivedKeys, password } = req.body;
         const finalAddress = address || location;
         const ssUserId = req.user._id;
 
@@ -250,10 +246,10 @@ const addDistributor = async (req, res) => {
             return res.status(404).json({ message: 'State Supervisor user not found.' });
         }
 
-        const ssAssignedKeys = ssUser.assignedKeys || 0;
-        const ssUsedKeys = ssUser.usedKeys || 0;
-        const ssBalanceKeys = ssAssignedKeys - ssUsedKeys;
-        const keysToAssign = assignedKeys || 0;
+        const ssReceivedKeys = ssUser.receivedKeys || 0;
+        const ssTransferredKeys = ssUser.transferredKeys || 0;
+        const ssBalanceKeys = ssReceivedKeys - ssTransferredKeys;
+        const keysToAssign = receivedKeys || 0;
 
         if (keysToAssign > ssBalanceKeys) {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. SS only has ${ssBalanceKeys} available keys.` });
@@ -272,13 +268,13 @@ const addDistributor = async (req, res) => {
             createdBy: ssUserId,
             address: finalAddress,
             status: status || 'active',
-            assignedKeys: keysToAssign,
-            usedKeys: 0,
+            receivedKeys: keysToAssign,
+            transferredKeys: 0,
         });
 
         await newDistributor.save();
 
-        ssUser.usedKeys += keysToAssign;
+        ssUser.transferredKeys += keysToAssign;
         await ssUser.save();
 
         const responseDistributor = newDistributor.toObject();
@@ -341,8 +337,8 @@ const updateDistributor = async (req, res) => {
 
         delete updates.role;
         delete updates.password;
-        delete updates.assignedKeys;
-        delete updates.usedKeys;
+        delete updates.receivedKeys;
+        delete updates.transferredKeys;
         delete updates.createdBy;
         delete updates.email;
 
@@ -400,8 +396,6 @@ const transferKeysToDb = async (req, res) => {
             { _id: { $in: keyIdsToUpdate } },
             { $set: { currentOwner: dbUser._id } }
         );
-        // Update DB assignedKeys
-        dbUser.assignedKeys += keysToTransfer;
         await dbUser.save();
         // Increment transferredKeys for SS (sender)
         await User.updateOne(
@@ -459,8 +453,8 @@ const updateSsProfile = async (req, res) => {
 
         delete updates.role;
         delete updates.password;
-        delete updates.assignedKeys;
-        delete updates.usedKeys;
+        delete updates.receivedKeys;
+        delete updates.transferredKeys;
         delete updates.createdBy;
         delete updates.email;
 

@@ -19,9 +19,10 @@ exports.login = async (req, res) => {
     console.log('Request body:', JSON.stringify(req.body));
     console.log('Request headers:', JSON.stringify(req.headers));
     
-    const { identifier, password } = req.body;
+    const { identifier, password, role: requestedRole } = req.body;
     console.log(`Identifier provided: ${identifier || 'none'}`);
     console.log(`Password provided: ${password ? '******' : 'none'}`);
+    console.log(`Role requested: ${requestedRole || 'none'}`);
 
     if (!identifier || !password) {
         console.log('Error: Missing identifier or password');
@@ -54,6 +55,26 @@ exports.login = async (req, res) => {
         }
 
         console.log('Password verified successfully');
+        
+        // Role verification - check if requested role matches user's actual role
+        if (requestedRole && requestedRole !== user.role) {
+            console.log(`Role mismatch: User is ${user.role}, but tried to login as ${requestedRole}`);
+            // Return role-specific guidance
+            const appMap = {
+                'admin': 'Admin Dashboard',
+                'nd': 'National Director Dashboard',
+                'ss': 'State Supervisor Dashboard',
+                'db': 'Distributor Dashboard',
+                'retailer': 'Retailer Dashboard',
+                'parent': 'Parent App'
+            };
+            
+            return res.status(403).json({ 
+                message: `You are a ${user.role} user. Please use the ${appMap[user.role] || user.role.toUpperCase() + ' App'} instead.`,
+                correctRole: user.role,
+                correctAppName: appMap[user.role] || `${user.role.toUpperCase()} App`
+            });
+        }
         
         console.log('Generating tokens...');
         const accessToken = generateAccessToken(user);

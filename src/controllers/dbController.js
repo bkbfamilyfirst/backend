@@ -10,15 +10,15 @@ const getDashboardSummary = async (req, res) => {
     try {
         const dbUserId = req.user._id;
 
-        const dbUser = await User.findById(dbUserId).select('assignedKeys usedKeys');
+        const dbUser = await User.findById(dbUserId).select('receivedKeys transferredKeys');
         if (!dbUser) {
             return res.status(404).json({ message: 'Distributor user not found.' });
         }
 
-        const totalReceivedKeys = dbUser.assignedKeys || 0; // This is the total assigned to DB
-        const allocatedKeys = dbUser.usedKeys || 0; // Keys DB has assigned to retailers
-        const balanceKeys = totalReceivedKeys - allocatedKeys;
-        const allocationStatus = totalReceivedKeys > 0 ? ((allocatedKeys / totalReceivedKeys) * 100).toFixed(2) : 0;
+        const totalReceivedKeys = dbUser.receivedKeys || 0; // This is the total assigned to DB
+        const transferredKeys = dbUser.transferredKeys || 0; // Keys DB has assigned to retailers
+        const balanceKeys = totalReceivedKeys - transferredKeys;
+        const allocationStatus = totalReceivedKeys > 0 ? ((transferredKeys / totalReceivedKeys) * 100).toFixed(2) : 0;
 
         // Date calculations for filters
         const now = new Date();
@@ -374,8 +374,8 @@ const getRetailerList = async (req, res) => {
                     email: 1,
                     phone: 1,
                     role: 1,
-                    assignedKeys: { $ifNull: ['$assignedKeys', 0] },
-                    usedKeys: { $ifNull: ['$usedKeys', 0] },
+                    receivedKeys: { $ifNull: ['$receivedKeys', 0] },
+                    transferredKeys: { $ifNull: ['$transferredKeys', 0] },
                     createdBy: 1,
                     address: { $ifNull: ['$address', null] },
                     status: 1,
@@ -450,7 +450,7 @@ const getRetailerCityStats = async (req, res) => {
 const addRetailer = async (req, res) => {
     try {
         // Prefer `address`; accept legacy `location`
-    const { name, username, email, phone, address, status, assignedKeys, password } = req.body;
+    const { name, username, email, phone, address, status, receivedKeys, password } = req.body;
         const dbUserId = req.user._id;
 
         if (!name || !username || !email || !phone || !address || !password) {
@@ -470,10 +470,10 @@ const addRetailer = async (req, res) => {
             return res.status(404).json({ message: 'Distributor user not found.' });
         }
 
-        const dbAssignedKeys = dbUser.assignedKeys || 0;
-        const dbUsedKeys = dbUser.usedKeys || 0;
-        const dbBalanceKeys = dbAssignedKeys - dbUsedKeys;
-        const keysToAssign = assignedKeys || 0;
+        const dbReceivedKeys = dbUser.receivedKeys || 0;
+        const dbTransferredKeys = dbUser.transferredKeys || 0;
+        const dbBalanceKeys = dbReceivedKeys - dbTransferredKeys;
+        const keysToAssign = receivedKeys || 0;
 
         if (keysToAssign > dbBalanceKeys) {
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. Distributor only has ${dbBalanceKeys} available keys.` });
@@ -494,14 +494,14 @@ const addRetailer = async (req, res) => {
             createdBy: dbUserId,
             address,
             status: status || 'active',
-            assignedKeys: keysToAssign,
-            usedKeys: 0,
+            receivedKeys: keysToAssign,
+            transferredKeys: 0,
         });
 
         await newRetailer.save();
 
-        // Update DB's usedKeys
-        dbUser.usedKeys += keysToAssign;
+        // Update DB's transferredKeys
+        dbUser.transferredKeys += keysToAssign;
         await dbUser.save();
 
     const responseRetailer = newRetailer.toObject();
@@ -536,8 +536,8 @@ const updateRetailer = async (req, res) => {
 
         delete updates.role;
         delete updates.password;
-        delete updates.assignedKeys;
-        delete updates.usedKeys;
+        delete updates.receivedKeys;
+        delete updates.transferredKeys;
         delete updates.createdBy;
         delete updates.email;
 
@@ -591,9 +591,7 @@ const transferKeysToRetailer = async (req, res) => {
             { _id: { $in: keyIdsToUpdate } },
             { $set: { currentOwner: retailerUser._id } }
         );
-        // Update Retailer assignedKeys
-        retailerUser.assignedKeys += keysToTransfer;
-        await retailerUser.save();
+
         // Increment transferredKeys for DB (sender)
         await User.updateOne(
             { _id: req.user._id },
@@ -695,9 +693,9 @@ const getDbProfile = async (req, res) => {
         // Quick Stats: Keys Managed (sum of assignedKeys to Retailers by this DB)
         const keysManagedAggregation = await User.aggregate([
             { $match: { role: 'retailer', createdBy: dbUserId } },
-            { $group: { _id: null, totalAssignedKeys: { $sum: '$assignedKeys' } } }
+            { $group: { _id: null, totalReceivedKeys: { $sum: '$receivedKeys' } } }
         ]);
-        const keysManaged = keysManagedAggregation[0]?.totalAssignedKeys || 0;
+        const keysManaged = keysManagedAggregation[0]?.totalReceivedKeys || 0;
 
         res.status(200).json({
             personalInformation: {
@@ -739,8 +737,8 @@ const updateDbProfile = async (req, res) => {
         delete updates.email;
         delete updates.role;
         delete updates.password;
-        delete updates.assignedKeys;
-        delete updates.usedKeys;
+        delete updates.receivedKeys;
+        delete updates.transferredKeys;
         delete updates.createdBy;
         delete updates.createdAt;
         delete updates.updatedAt;
@@ -813,7 +811,7 @@ const getDbKeyDistributionStats = async (req, res) => {
     try {
         const dbUserId = req.user._id;
 
-        const dbUser = await User.findById(dbUserId).select('assignedKeys usedKeys transferredKeys recievedKeys');
+        const dbUser = await User.findById(dbUserId).select('transferredKeys receivedKeys');
         if (!dbUser) {
             return res.status(404).json({ message: 'Distributor user not found.' });
         }
@@ -1186,8 +1184,7 @@ const receiveKeysFromSs = async (req, res) => {
         }
 
 
-        // Update DB's assigned keys (total received) and receivedKeys
-        dbUser.assignedKeys += quantity;
+        // Update DB's received keys (total received) and receivedKeys
         dbUser.receivedKeys = (dbUser.receivedKeys || 0) + quantity;
         await dbUser.save();
 
@@ -1235,20 +1232,23 @@ const distributeKeysToRetailers = async (req, res) => {
             return res.status(404).json({ message: 'Distributor user not found.' });
         }
 
-        const dbBalanceKeys = (dbUser.assignedKeys || 0) - (dbUser.usedKeys || 0);
+        const dbBalanceKeys = (dbUser.receivedKeys || 0) - (dbUser.transferredKeys || 0);
 
         if (quantity > dbBalanceKeys) {
             return res.status(400).json({ message: `Cannot distribute ${quantity} keys. Distributor only has ${dbBalanceKeys} available keys.` });
         }
 
 
-        // Update DB's used keys, transferredKeys, and retailer's assignedKeys, receivedKeys
-        dbUser.usedKeys += quantity;
-        dbUser.transferredKeys = (dbUser.transferredKeys || 0) + quantity;
-        retailerUser.assignedKeys += quantity;
-        retailerUser.receivedKeys = (retailerUser.receivedKeys || 0) + quantity;
-        await dbUser.save();
-        await retailerUser.save();
+        // Atomically increment DB's transferredKeys and Retailer's receivedKeys (sender/receiver counters)
+        await User.updateOne(
+            { _id: dbUserId },
+            { $inc: { transferredKeys: quantity } }
+        );
+
+        await User.updateOne(
+            { _id: retailerId },
+            { $inc: { receivedKeys: quantity } }
+        );
 
         const newKeyTransferLog = new KeyTransferLog({
             fromUser: dbUserId,

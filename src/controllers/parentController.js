@@ -170,8 +170,8 @@ exports.createChild = async (req, res) => {
         const child = new Child({ name, age, deviceImei: deviceImei || undefined, parentId: parent._id });
         await child.save();
 
-        // Increment parent's usedKeys counter (if tracking usage)
-        await User.updateOne({ _id: parent._id }, { $inc: { usedKeys: 1 } });
+        // Increment parent's transferredKeys counter (if tracking usage)
+        await User.updateOne({ _id: parent._id }, { $inc: { transferredKeys: 1 } });
 
         return res.status(201).json({
             message: 'Child created successfully.',
