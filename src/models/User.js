@@ -20,11 +20,6 @@ const userSchema = new mongoose.Schema({
         unique: true,
         sparse: true // Only for parents
     },
-    assignedKey: {
-        type: String,
-        unique: true,
-        sparse: true // Only for parents
-    },
     // For all users
     transferredKeys: { type: Number, default: 0 }, // Increment when user transfers keys
     // For ND, SS, DB, Retailer roles only (not admin, parent, child)

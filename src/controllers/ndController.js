@@ -64,15 +64,36 @@ const getSsStats = async (req, res) => {
 };
 
 // GET /nd/key-transfer-logs
+// GET /nd/key-transfer-logs
 const getKeyTransferLogs = async (req, res) => {
     try {
-        const { startDate, endDate, status, type, search, page = 1, limit = 10 } = req.query;
-        const ndUserId = req.user._id;
-        const ssIds = await User.find({ role: 'ss', createdBy: ndUserId }).distinct('_id');
+        // Parse and validate query parameters
+        const { 
+            startDate, 
+            endDate, 
+            status, 
+            type, 
+            search, 
+            page = 1, 
+            limit = 10 
+        } = req.query;
 
+        const parsedPage = parseInt(page, 10) || 1;
+        const parsedLimit = parseInt(limit, 10) || 10;
+        const skip = (parsedPage - 1) * parsedLimit;
+        
+        const ndUserId = req.user._id;
+        const ndUserIdStr = ndUserId.toString();
+        
+        // Get all SS users created by this ND (will be used for filtering)
+        const ssUsers = await User.find({ role: 'ss', createdBy: ndUserId });
+        const ssIds = ssUsers.map(ss => ss._id);
+        const ssIdStrings = ssIds.map(id => id.toString());
+        
+        // Build base query filter
         let queryFilter = {};
 
-        // Apply type filter if specified
+        // Apply type filter (Sent/Received/All)
         if (type === 'Sent') {
             queryFilter.$or = [
                 { fromUser: ndUserId },
@@ -83,7 +104,8 @@ const getKeyTransferLogs = async (req, res) => {
                 { toUser: ndUserId },
                 { toUser: { $in: ssIds } }
             ];
-        } else { // 'All' or no type specified
+        } else {
+            // 'All' or no type specified - include all logs relevant to ND and SS users
             queryFilter.$or = [
                 { fromUser: ndUserId },
                 { toUser: ndUserId },
@@ -92,11 +114,16 @@ const getKeyTransferLogs = async (req, res) => {
             ];
         }
 
-        // Apply date filter
+        // Apply date filtering
         if (startDate || endDate) {
             queryFilter.date = {};
             if (startDate) queryFilter.date.$gte = new Date(startDate);
-            if (endDate) queryFilter.date.$lte = new Date(endDate);
+            if (endDate) {
+                // Set the end date to the end of the day
+                const endOfDay = new Date(endDate);
+                endOfDay.setHours(23, 59, 59, 999);
+                queryFilter.date.$lte = endOfDay;
+            }
         }
 
         // Apply status filter
@@ -104,61 +131,124 @@ const getKeyTransferLogs = async (req, res) => {
             queryFilter.status = status;
         }
 
-        // Initial query to MongoDB, populate users for name search later
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        // Apply text search on notes field directly in the query when possible
+        if (search) {
+            // Add notes text search to the filter (can be done at DB level)
+            queryFilter.$and = queryFilter.$and || [];
+            queryFilter.$and.push({
+                $or: [
+                    { notes: { $regex: search, $options: 'i' } }
+                    // We can't filter on populated fields (fromUser.name, toUser.name) directly in the query
+                    // We'll do that client-side after population
+                ]
+            });
+        }
+
+        // Initial query without limit/skip for accurate total count if using search
+        let countQuery = KeyTransferLog.find(queryFilter);
+        
+        // Main query with pagination
         let query = KeyTransferLog.find(queryFilter)
-            .sort({ date: -1 })
+            .sort({ date: -1, _id: -1 }) // Stable sort with _id as tiebreaker
             .skip(skip)
-            .limit(parseInt(limit))
+            .limit(parsedLimit)
             .populate('fromUser', 'name email role')
             .populate('toUser', 'name email role');
 
+        // Execute the main query
         let logs = await query.exec();
-
-        // Client-side filtering for populated user names if search term is present
-        if (search) {
+        
+        // If search term is present, apply additional client-side filtering for user names
+        const needsClientSideFiltering = search && search.trim().length > 0;
+        
+        if (needsClientSideFiltering) {
             logs = logs.filter(log =>
-                (log.fromUser && log.fromUser.name && log.fromUser.name.toLowerCase().includes(search.toLowerCase())) ||
-                (log.toUser && log.toUser.name && log.toUser.name.toLowerCase().includes(search.toLowerCase())) ||
+                (log.fromUser && log.fromUser.name && 
+                    log.fromUser.name.toLowerCase().includes(search.toLowerCase())) ||
+                (log.toUser && log.toUser.name && 
+                    log.toUser.name.toLowerCase().includes(search.toLowerCase())) ||
                 (log.notes && log.notes.toLowerCase().includes(search.toLowerCase()))
             );
+            
+            // For search with name filters, we need to get total count with the same filtering
+            // This is expensive but necessary for accurate pagination
+            const allLogs = await KeyTransferLog.find(queryFilter)
+                .populate('fromUser', 'name')
+                .populate('toUser', 'name');
+                
+            const filteredLogs = allLogs.filter(log =>
+                (log.fromUser && log.fromUser.name && 
+                    log.fromUser.name.toLowerCase().includes(search.toLowerCase())) ||
+                (log.toUser && log.toUser.name && 
+                    log.toUser.name.toLowerCase().includes(search.toLowerCase())) ||
+                (log.notes && log.notes.toLowerCase().includes(search.toLowerCase()))
+            );
+            
+            var total = filteredLogs.length;
+        } else {
+            // If no client-side filtering, we can use countDocuments for better performance
+            var total = await KeyTransferLog.countDocuments(queryFilter);
         }
-        
-        // Count total documents for pagination without limit/skip
-        const total = await KeyTransferLog.countDocuments(queryFilter);
 
-        // Map logs to desired response format, including correct 'Type' for UI
+        // Map logs to desired response format with the correct transaction type
         const result = logs.map(log => {
-            let transactionTypeForUI = '';
-            if (log.toUser && log.toUser._id.toString() === ndUserId.toString()) {
-                transactionTypeForUI = 'Received';
-            } else if (log.fromUser && log.fromUser._id.toString() === ndUserId.toString()) {
-                transactionTypeForUI = 'Sent';
-            } else if (log.toUser && ssIds.includes(log.toUser._id.toString())) {
-                transactionTypeForUI = 'Received';
-            } else if (log.fromUser && ssIds.includes(log.fromUser._id.toString())) {
-                transactionTypeForUI = 'Sent';
+            // Determine transaction type from the ND's perspective
+            let transactionType;
+            
+            const fromIdStr = log.fromUser?._id?.toString();
+            const toIdStr = log.toUser?._id?.toString();
+            
+            if (fromIdStr === ndUserIdStr || ssIdStrings.includes(fromIdStr)) {
+                // ND or any of its SS users is the sender
+                transactionType = 'Sent';
+            } else if (toIdStr === ndUserIdStr || ssIdStrings.includes(toIdStr)) {
+                // ND or any of its SS users is the receiver
+                transactionType = 'Received';
             } else {
-                transactionTypeForUI = log.type; 
+                // Fallback to the log's type field
+                transactionType = log.type || 'Unknown';
             }
 
             return {
                 transferId: log._id,
                 timestamp: log.date,
-                from: log.fromUser ? { id: log.fromUser._id, name: log.fromUser.name, role: log.fromUser.role } : null,
-                to: log.toUser ? { id: log.toUser._id, name: log.toUser.name, role: log.toUser.role } : null,
+                from: log.fromUser ? { 
+                    id: log.fromUser._id, 
+                    name: log.fromUser.name, 
+                    role: log.fromUser.role 
+                } : null,
+                to: log.toUser ? { 
+                    id: log.toUser._id, 
+                    name: log.toUser.name, 
+                    role: log.toUser.role 
+                } : null,
                 count: log.count,
                 status: log.status,
-                type: transactionTypeForUI,
+                type: transactionType,
                 notes: log.notes,
             };
         });
 
-        res.status(200).json({ total, page: parseInt(page), limit: parseInt(limit), logs: result });
+        res.status(200).json({ 
+            total, 
+            page: parsedPage, 
+            limit: parsedLimit, 
+            logs: result,
+            // Add useful debug info
+            filters: {
+                type,
+                status,
+                dateRange: startDate || endDate ? { start: startDate, end: endDate } : null,
+                search: search || null
+            }
+        });
 
     } catch (error) {
         console.error('Error fetching ND key transfer logs:', error);
-        res.status(500).json({ message: 'Server error during key transfer logs retrieval.' });
+        res.status(500).json({ 
+            message: 'Server error during key transfer logs retrieval.',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 
@@ -532,40 +622,74 @@ const transferKeysToSs = async (req, res) => {
         if (!ssUser) {
             return res.status(404).json({ message: 'State Supervisor not found.' });
         }
+        
         // Count available unassigned keys currently owned by ND
         const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
         if (keysToTransfer > availableUnassignedKeysCount) {
             return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for this ND.` });
         }
-        // Find and update a batch of unassigned keys owned by this ND
+        
+        // Find keys to update
         const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
         const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
-        await Key.updateMany(
-            { _id: { $in: keyIdsToUpdate } },
-            { $set: { currentOwner: ssUser._id } }
-        );
-        await ssUser.save();
-        // Increment transferredKeys for ND (sender)
-        await User.updateOne(
-            { _id: req.user._id },
-            { $inc: { transferredKeys: keysToTransfer } }
-        );
-        // Increment receivedKeys for SS (receiver)
-        await User.updateOne(
-            { _id: ssUser._id },
-            { $inc: { receivedKeys: keysToTransfer } }
-        );
-        // Create KeyTransferLog
-        const newKeyTransferLog = new KeyTransferLog({
-            fromUser: req.user._id,
-            toUser: ssId,
-            count: keysToTransfer,
-            status: 'completed',
-            type: 'bulk',
-            notes: `Bulk transferred ${keysToTransfer} keys from ND to SS: ${ssUser.name}`
-        });
-        await newKeyTransferLog.save();
-        res.status(200).json({ message: 'Keys transferred to State Supervisor successfully.' });
+        
+        // Use transactions for consistency
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
+        try {
+            // Update key ownership
+            await Key.updateMany(
+                { _id: { $in: keyIdsToUpdate } },
+                { $set: { currentOwner: ssUser._id } },
+                { session }
+            );
+            
+            // Increment transferredKeys for ND (sender)
+            const ndResult = await User.updateOne(
+                { _id: req.user._id },
+                { $inc: { transferredKeys: keysToTransfer } },
+                { session }
+            );
+            
+            // Increment receivedKeys for SS (receiver)
+            const ssResult = await User.updateOne(
+                { _id: ssUser._id },
+                { $inc: { receivedKeys: keysToTransfer } },
+                { session }
+            );
+            
+            // Create KeyTransferLog with explicit date
+            const newKeyTransferLog = new KeyTransferLog({
+                fromUser: req.user._id,
+                toUser: ssId,
+                count: keysToTransfer,
+                status: 'completed',
+                type: 'bulk',
+                date: new Date(), // Explicitly set date
+                notes: `Bulk transferred ${keysToTransfer} keys from ND to SS: ${ssUser.name}`
+            });
+            await newKeyTransferLog.save({ session });
+            
+            // Verify updates succeeded
+            if (ndResult.modifiedCount !== 1 || ssResult.modifiedCount !== 1) {
+                throw new Error('Failed to update user counters');
+            }
+            
+            await session.commitTransaction();
+            res.status(200).json({ 
+                message: 'Keys transferred to State Supervisor successfully.',
+                ndUpdated: ndResult.modifiedCount === 1,
+                ssUpdated: ssResult.modifiedCount === 1,
+                keysUpdated: keyIdsToUpdate.length
+            });
+        } catch (error) {
+            await session.abortTransaction();
+            console.error('Transaction error during key transfer:', error);
+            res.status(500).json({ message: 'Transaction error during key transfer.' });
+        } finally {
+            session.endSession();
+        }
     } catch (error) {
         console.error('Error transferring keys to SS:', error);
         res.status(500).json({ message: 'Server error during key transfer.' });

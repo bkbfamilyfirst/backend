@@ -145,15 +145,10 @@ exports.createChild = async (req, res) => {
         const parent = await User.findOne({ _id: parentId, role: 'parent' });
         if (!parent) return res.status(404).json({ message: 'Parent not found.' });
 
-        // Check whether parent has an assigned activation key
-        if (!parent.assignedKey) {
-            return res.status(403).json({ message: 'No activation key found. Please request an activation key from your retailer to register a child.' });
-        }
-
-        // Verify the key exists and is assigned to this parent
-        const keyRecord = await Key.findOne({ key: parent.assignedKey });
-        if (!keyRecord || String(keyRecord.assignedTo) !== String(parent._id)) {
-            return res.status(403).json({ message: 'Your activation key is missing or invalid. Please contact your retailer to obtain a valid key.' });
+        // Find an available activation key owned by this parent (not yet assigned to a child)
+        const availableKey = await Key.findOne({ currentOwner: parent._id, isAssigned: false });
+        if (!availableKey) {
+            return res.status(403).json({ message: 'No available activation key found. Please request a key from your retailer to register a child.' });
         }
 
         const { name, age, deviceImei } = req.body || {};
@@ -167,8 +162,21 @@ exports.createChild = async (req, res) => {
             if (existing) return res.status(409).json({ message: 'Device IMEI already registered to another child.' });
         }
 
-        const child = new Child({ name, age, deviceImei: deviceImei || undefined, parentId: parent._id });
+        // Assign the available key to the child
+        const child = new Child({
+            name,
+            age,
+            deviceImei: deviceImei || undefined,
+            parentId: parent._id,
+            assignedKey: availableKey.key
+        });
         await child.save();
+
+        // Mark the key as assigned to this child
+        availableKey.isAssigned = true;
+        availableKey.assignedTo = child._id;
+        availableKey.assignedAt = new Date();
+        await availableKey.save();
 
         // Increment parent's transferredKeys counter (if tracking usage)
         await User.updateOne({ _id: parent._id }, { $inc: { transferredKeys: 1 } });
@@ -180,7 +188,8 @@ exports.createChild = async (req, res) => {
                 name: child.name,
                 age: child.age,
                 deviceImei: child.deviceImei,
-                parentId: child.parentId
+                parentId: child.parentId,
+                assignedKey: child.assignedKey
             }
         });
     } catch (error) {

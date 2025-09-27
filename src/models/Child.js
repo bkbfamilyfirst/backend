@@ -17,7 +17,13 @@ const childSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User', // Parent is now User with role 'parent'
         required: true
+    },
+    assignedKey: {
+        type: String,
+        unique: true,
+        sparse: true // Only for children
     }
+
 }, { timestamps: true });
 
 const Child = mongoose.model('Child', childSchema);
