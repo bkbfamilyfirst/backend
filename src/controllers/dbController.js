@@ -18,7 +18,7 @@ const getDashboardSummary = async (req, res) => {
         const totalReceivedKeys = dbUser.receivedKeys || 0; // This is the total assigned to DB
         const transferredKeys = dbUser.transferredKeys || 0; // Keys DB has assigned to retailers
         const balanceKeys = totalReceivedKeys - transferredKeys;
-        const allocationStatus = totalReceivedKeys > 0 ? ((transferredKeys / totalReceivedKeys) * 100).toFixed(2) : 0;
+        const transferStatus = totalReceivedKeys > 0 ? ((transferredKeys / totalReceivedKeys) * 100).toFixed(2) : 0;
 
         // Date calculations for filters
         const now = new Date();
@@ -71,9 +71,29 @@ const getDashboardSummary = async (req, res) => {
         // Retailer Count
         const totalActiveRetailers = await User.countDocuments({ role: 'retailer', createdBy: dbUserId, status: 'active' });
 
-        // Placeholder for growth this month
-        const growthThisMonth = '8.3%';
+        const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
 
+        // Count retailers created this month and last month
+        const retailersThisMonth = await User.countDocuments({
+            role: 'retailer',
+            createdBy: dbUserId,
+            createdAt: { $gte: thisMonthStart }
+        });
+
+        const retailersLastMonth = await User.countDocuments({
+            role: 'retailer',
+            createdBy: dbUserId,
+            createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd }
+        });
+        let growthThisMonth = '0.0%';
+        if (retailersLastMonth > 0) {
+            const growthRate = ((retailersThisMonth - retailersLastMonth) / retailersLastMonth) * 100;
+            growthThisMonth = `${growthRate > 0 ? '+' : ''}${growthRate.toFixed(1)}%`;
+        } else if (retailersThisMonth > 0) {
+            growthThisMonth = '+100.0%'; // If no retailers last month but some this month
+        }
         // Dynamic Regional Distribution
         const regionalDistributionAgg = await User.aggregate([
             { $match: { role: 'retailer', createdBy: dbUserId, status: 'active' } },
@@ -184,8 +204,8 @@ const getDashboardSummary = async (req, res) => {
                 lastBatch: lastBatchDetails
             },
             balanceKeys: balanceKeys,
-            allocationStatus: parseFloat(allocationStatus),
-            allocated: allocatedKeys,
+            transferStatus: parseFloat(transferStatus),
+            transferredKeys: transferredKeys,
             available: balanceKeys,
             retailerCount: {
                 totalActiveRetailers,
@@ -967,7 +987,10 @@ const getDistributionHistory = async (req, res) => {
             batch: entry.notes || `DB-Batch-${entry._id.toString().slice(-5).toUpperCase()}`, // Placeholder for batch, maybe use reference
             region: entry.toUser.address,
             date: entry.date,
-            status: entry.status,
+            status: entry.status === 'completed' ? 'confirmed'
+                 : entry.status === 'pending' ? 'pending'
+                 : entry.status === 'failed' ? 'failed'
+                 : 'pending',
             // Actions: Client-side logic for 'Confirm', 'Mark Delivered', 'Mark Sent' based on status
         }));
 
