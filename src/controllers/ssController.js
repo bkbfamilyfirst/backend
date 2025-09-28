@@ -205,16 +205,25 @@ const getKeyTransferLogs = async (req, res) => {
             );
         }
         const total = await KeyTransferLog.countDocuments(filter);
-        const result = logs.map(log => ({
-            transferId: log._id,
-            timestamp: log.date,
-            from: log.fromUser ? { id: log.fromUser._id, name: log.fromUser.name, role: log.fromUser.role } : null,
-            to: log.toUser ? { id: log.toUser._id, name: log.toUser.name, role: log.toUser.role } : null,
-            count: log.count,
-            status: log.status,
-            type: log.type,
-            notes: log.notes,
-        }));
+        const result = logs.map(log => {
+            let direction = null;
+            if (log.fromUser && String(log.fromUser._id) === String(req.user._id)) {
+                direction = 'Sent';
+            } else if (log.toUser && String(log.toUser._id) === String(req.user._id)) {
+                direction = 'Received';
+            }
+            return {
+                transferId: log._id,
+                timestamp: log.date,
+                from: log.fromUser ? { id: log.fromUser._id, name: log.fromUser.name, role: log.fromUser.role } : null,
+                to: log.toUser ? { id: log.toUser._id, name: log.toUser.name, role: log.toUser.role } : null,
+                count: log.count,
+                status: log.status,
+                type: log.type,
+                notes: log.notes,
+                direction
+            };
+        });
         res.status(200).json({ total, page: parseInt(page), limit: parseInt(limit), logs: result });
     } catch (error) {
         console.error('Error fetching SS key transfer logs:', error);
@@ -224,6 +233,8 @@ const getKeyTransferLogs = async (req, res) => {
 
 // POST /ss/distributors
 const addDistributor = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
         // Prefer `address`; accept legacy `location` for compatibility
         const { name, username, email, phone, location, address, status, receivedKeys, password } = req.body;
@@ -231,18 +242,24 @@ const addDistributor = async (req, res) => {
         const ssUserId = req.user._id;
 
         if (!name || !username || !email || !phone || !finalAddress || !password) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({ message: 'Please provide name, username, email, phone, address (or legacy location), and password.' });
         }
 
         // Check if username, email, or phone already exists
-        const existingUser = await User.findOne({ $or: [ { email }, { phone }, { username } ] });
+        const existingUser = await User.findOne({ $or: [ { email }, { phone }, { username } ] }).session(session);
         if (existingUser) {
             let conflictField = existingUser.email === email ? 'email' : (existingUser.phone === phone ? 'phone' : 'username');
+            await session.abortTransaction();
+            session.endSession();
             return res.status(409).json({ message: `User with this ${conflictField} already exists.` });
         }
 
-        const ssUser = await User.findById(ssUserId);
+        const ssUser = await User.findById(ssUserId).session(session);
         if (!ssUser) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(404).json({ message: 'State Supervisor user not found.' });
         }
 
@@ -252,6 +269,8 @@ const addDistributor = async (req, res) => {
         const keysToAssign = receivedKeys || 0;
 
         if (keysToAssign > ssBalanceKeys) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({ message: `Cannot assign ${keysToAssign} keys. SS only has ${ssBalanceKeys} available keys.` });
         }
 
@@ -272,21 +291,38 @@ const addDistributor = async (req, res) => {
             transferredKeys: 0,
         });
 
-        await newDistributor.save();
+        await newDistributor.save({ session });
 
         ssUser.transferredKeys += keysToAssign;
-        await ssUser.save();
+        await ssUser.save({ session });
+
+        // Create KeyTransferLog for initial assignment if keys assigned
+        if (keysToAssign > 0) {
+            const newKeyTransferLog = new KeyTransferLog({
+                fromUser: ssUserId,
+                toUser: newDistributor._id,
+                count: keysToAssign,
+                status: 'completed',
+                type: 'initial',
+                notes: `Initial assignment of ${keysToAssign} keys to new Distributor: ${name}`
+            });
+            await newKeyTransferLog.save({ session });
+        }
+
+        await session.commitTransaction();
+        session.endSession();
 
         const responseDistributor = newDistributor.toObject();
         delete responseDistributor.password;
-    // Provide address field in response
-    responseDistributor.address = newDistributor.address || "Not specified";
+        responseDistributor.address = newDistributor.address || "Not specified";
 
         res.status(201).json({ message: 'Distributor added successfully.', distributor: responseDistributor, password });
 
     } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
         console.error('Error adding new Distributor for SS:', error);
-        res.status(500).json({ message: 'Server error during Distributor creation.' });
+        res.status(500).json({ message: `Server error during Distributor creation. ${error.message}` });
     }
 };
 
@@ -375,37 +411,47 @@ const deleteDistributor = async (req, res) => {
 
 // POST /ss/transfer-keys-to-db
 const transferKeysToDb = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
         const { dbId, keysToTransfer } = req.body;
         if (!dbId || !keysToTransfer || keysToTransfer <= 0) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({ message: 'Please provide a valid Distributor ID and a positive number of keys to transfer.' });
         }
-        const dbUser = await User.findOne({ _id: dbId, role: 'db', createdBy: req.user._id });
+        const dbUser = await User.findOne({ _id: dbId, role: 'db', createdBy: req.user._id }).session(session);
         if (!dbUser) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(404).json({ message: 'Distributor not found.' });
         }
         // Count available unassigned keys currently owned by SS
-        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
+        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id }).session(session);
         if (keysToTransfer > availableUnassignedKeysCount) {
-            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for this SS.` });
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for you.` });
         }
         // Find and update a batch of unassigned keys owned by this SS
-        const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
+        const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer).session(session);
         const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
         await Key.updateMany(
             { _id: { $in: keyIdsToUpdate } },
-            { $set: { currentOwner: dbUser._id } }
+            { $set: { currentOwner: dbUser._id } },
+            { session }
         );
-        await dbUser.save();
         // Increment transferredKeys for SS (sender)
         await User.updateOne(
             { _id: req.user._id },
-            { $inc: { transferredKeys: keysToTransfer } }
+            { $inc: { transferredKeys: keysToTransfer } },
+            { session }
         );
         // Increment receivedKeys for DB (receiver)
         await User.updateOne(
             { _id: dbUser._id },
-            { $inc: { receivedKeys: keysToTransfer } }
+            { $inc: { receivedKeys: keysToTransfer } },
+            { session }
         );
         // Create KeyTransferLog
         const newKeyTransferLog = new KeyTransferLog({
@@ -416,9 +462,13 @@ const transferKeysToDb = async (req, res) => {
             type: 'bulk',
             notes: `Bulk transferred ${keysToTransfer} keys from SS to DB: ${dbUser.name}`
         });
-        await newKeyTransferLog.save();
+        await newKeyTransferLog.save({ session });
+        await session.commitTransaction();
+        session.endSession();
         res.status(200).json({ message: 'Keys transferred to Distributor successfully.' });
     } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
         console.error('Error transferring keys to DB:', error);
         res.status(500).json({ message: 'Server error during key transfer.' });
     }
