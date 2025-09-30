@@ -72,7 +72,6 @@ exports.getReports = async (req, res) => {
     // Total active parents
     const totalActiveParents = await User.countDocuments({ createdBy: retailerId, role: 'parent', status: 'active' });
     res.json({
-      totalKeys,
       receivedKeys,
       transferredKeys,
       totalBalance,
