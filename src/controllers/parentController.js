@@ -56,73 +56,73 @@ const findDeviceAndVerifyParent = async (deviceId, parentId) => {
 };
 
 // POST /parent/create
-exports.createParent = async (req, res) => {
-    // Prefer `address` if provided (back-compat not required here, but keep pattern)
-    const { name, phone, email, deviceImei, assignedKey, address, role } = req.body;
-    if (!name || !phone || !email || !deviceImei || !assignedKey) {
-        return res.status(400).json({ message: 'All fields are required.' });
-    }
-    try {
-        // Check if email or IMEI already exists
-        const existingParentByEmail = await User.findOne({ email, role: 'parent' });
-        if (existingParentByEmail) {
-            return res.status(409).json({ message: 'Parent with this email already exists.' });
-        }
-        const existingParentByImei = await User.findOne({ deviceImei, role: 'parent' });
-        if (existingParentByImei) {
-            return res.status(409).json({ message: 'Parent with this device IMEI already exists.' });
-        }
-        // Check if assignedKey is valid and not already assigned
-        const key = await Key.findOne({ key: assignedKey });
-        if (!key) {
-            return res.status(404).json({ message: 'Invalid activation key.' });
-        }
-        if (key.isAssigned) {
-            return res.status(409).json({ message: 'Activation key already assigned.' });
-        }
-        // Hash password (auto-generate or from req.body)
-        let password = req.body.password;
-        if (!password) {
-            password = Math.random().toString(36).slice(-8); // Generate random 8-char password
-        }
-        // Validate provided password when present
-        const passCheck = validatePassword(password);
-        if (!passCheck.valid) return res.status(400).json({ message: passCheck.message });
-        const hashedPassword = await hashPassword(password);
-        // Create parent as User with role 'parent'
-        const parent = new User({
-            name,
-            phone,
-            email,
-            password: hashedPassword,
-            role: 'parent',
-            deviceImei,
-            assignedKey,
-            createdBy: req.user._id,
-        });
-        if (address) parent.address = address;
-        await parent.save();
-        // Assign key
-        key.isAssigned = true;
-        key.assignedTo = parent._id;
-        key.assignedAt = new Date();
-        await key.save();
-        res.status(201).json({
-            message: 'Parent created successfully.',
-            parent: {
-                id: parent._id,
-                name: parent.name,
-                phone: parent.phone,
-                email: parent.email,
-                deviceImei: parent.deviceImei,
-                assignedKey: parent.assignedKey,
-            }
-        });
-    } catch (error) {
-        console.error('Error creating parent:', error);
-        res.status(500).json({ message: 'Server error during parent creation.' });
-    }
-};
+// exports.createParent = async (req, res) => {
+//     // Prefer `address` if provided (back-compat not required here, but keep pattern)
+//     const { name, phone, email, deviceImei, assignedKey, address, role } = req.body;
+//     if (!name || !phone || !email || !deviceImei || !assignedKey) {
+//         return res.status(400).json({ message: 'All fields are required.' });
+//     }
+//     try {
+//         // Check if email or IMEI already exists
+//         const existingParentByEmail = await User.findOne({ email, role: 'parent' });
+//         if (existingParentByEmail) {
+//             return res.status(409).json({ message: 'Parent with this email already exists.' });
+//         }
+//         const existingParentByImei = await User.findOne({ deviceImei, role: 'parent' });
+//         if (existingParentByImei) {
+//             return res.status(409).json({ message: 'Parent with this device IMEI already exists.' });
+//         }
+//         // Check if assignedKey is valid and not already assigned
+//         const key = await Key.findOne({ key: assignedKey });
+//         if (!key) {
+//             return res.status(404).json({ message: 'Invalid activation key.' });
+//         }
+//         if (key.isAssigned) {
+//             return res.status(409).json({ message: 'Activation key already assigned.' });
+//         }
+//         // Hash password (auto-generate or from req.body)
+//         let password = req.body.password;
+//         if (!password) {
+//             password = Math.random().toString(36).slice(-8); // Generate random 8-char password
+//         }
+//         // Validate provided password when present
+//         const passCheck = validatePassword(password);
+//         if (!passCheck.valid) return res.status(400).json({ message: passCheck.message });
+//         const hashedPassword = await hashPassword(password);
+//         // Create parent as User with role 'parent'
+//         const parent = new User({
+//             name,
+//             phone,
+//             email,
+//             password: hashedPassword,
+//             role: 'parent',
+//             deviceImei,
+//             assignedKey,
+//             createdBy: req.user._id,
+//         });
+//         if (address) parent.address = address;
+//         await parent.save();
+//         // Assign key
+//         key.isAssigned = true;
+//         key.assignedTo = parent._id;
+//         key.assignedAt = new Date();
+//         await key.save();
+//         res.status(201).json({
+//             message: 'Parent created successfully.',
+//             parent: {
+//                 id: parent._id,
+//                 name: parent.name,
+//                 phone: parent.phone,
+//                 email: parent.email,
+//                 deviceImei: parent.deviceImei,
+//                 assignedKey: parent.assignedKey,
+//             }
+//         });
+//     } catch (error) {
+//         console.error('Error creating parent:', error);
+//         res.status(500).json({ message: 'Server error during parent creation.' });
+//     }
+// };
         
 // GET /parent/list
 exports.listParents = async (req, res) => {
@@ -169,6 +169,7 @@ exports.createChild = async (req, res) => {
         availableKey.isAssigned = true;
         availableKey.assignedTo = child._id;
         availableKey.assignedAt = new Date();
+        availableKey.validUntil = new Date(new Date().setFullYear(new Date().getFullYear() + 2));
         await availableKey.save();
 
         // Increment parent's transferredKeys counter (if tracking usage)

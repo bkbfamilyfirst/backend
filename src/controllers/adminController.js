@@ -620,7 +620,6 @@ exports.generateKeys = async (req, res) => {
                 key: uniqueKey,
                 generatedBy: req.user._id,
                 currentOwner: req.user._id,
-                validUntil: new Date(new Date().setFullYear(new Date().getFullYear() + 2)), // 2 years from now
             });
             await newKey.save();
             generatedKeys.push(newKey);
@@ -1261,11 +1260,11 @@ exports.addNd = async (req, res) => {
         await newNd.save();
 
         // Mark keys as assigned in the Key model
-        const keysToMarkAssigned = await Key.find({ isAssigned: false }).limit(keysToAssign);
-        await Key.updateMany(
-            { _id: { $in: keysToMarkAssigned.map(key => key._id) } },
-            { $set: { isAssigned: true, currentOwner: newNd._id } }
-        );
+        // const keysToMarkAssigned = await Key.find({ isAssigned: false }).limit(keysToAssign);
+        // await Key.updateMany(
+        //     { _id: { $in: keysToMarkAssigned.map(key => key._id) } },
+        //     { $set: { isAssigned: true, currentOwner: newNd._id } }
+        // );
 
         // Create a KeyTransferLog entry for the bulk transfer from Admin to ND
         if (keysToAssign > 0) {

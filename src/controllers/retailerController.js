@@ -43,7 +43,13 @@ exports.getReports = async (req, res) => {
     const transferredKeys = retailerUser?.transferredKeys || 0;
     const totalBalance = receivedKeys - transferredKeys;
 
-    // Period-based activations
+    // Resolve parents and children belonging to this retailer
+    const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
+    const childIds = parentIds.length > 0
+      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' }).distinct('_id')
+      : [];
+
+    // Period-based activations (keys assigned to children)
     let dateFilter = {};
     const now = new Date();
     if (period === 'daily') {
@@ -64,13 +70,14 @@ exports.getReports = async (req, res) => {
       const start = new Date(now.getFullYear(), 0, 1);
       dateFilter = { $gte: start, $lte: now };
     }
-    const periodActivations = await KeyTransferLog.countDocuments({
-      from: retailerId,
-      transferType: 'retailer-to-parent',
-      createdAt: dateFilter
-    });
-    // Total active parents
+
+    const periodActivations = childIds.length > 0
+      ? await Key.countDocuments({ assignedTo: { $in: childIds }, assignedAt: dateFilter })
+      : 0;
+
+    // Total active parents (unchanged)
     const totalActiveParents = await User.countDocuments({ createdBy: retailerId, role: 'parent', status: 'active' });
+
     res.json({
       receivedKeys,
       transferredKeys,
@@ -82,38 +89,43 @@ exports.getReports = async (req, res) => {
     res.status(500).json({ message: `Error fetching reports: ${err.message}` });
   }
 };
+
 // GET /retailer/dashboard-summary
 exports.getDashboardSummary = async (req, res) => {
   try {
     const retailerId = req.user.id;
     const retailerUser = await User.findById(retailerId).select('transferredKeys receivedKeys');
-    // Today's activations
+    // Resolve parents and children for this retailer
+    const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
+    const childIds = parentIds.length > 0
+      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' }).distinct('_id')
+      : [];
+
+    // Today's activations (keys assigned to children today)
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
-    const todaysActivations = await KeyTransferLog.countDocuments({
-      from: retailerId,
-      transferType: 'retailer-to-parent',
-      createdAt: { $gte: todayStart, $lte: todayEnd }
-    });
-    // Total activations
-    const totalActivations = await KeyTransferLog.countDocuments({
-      from: retailerId,
-      transferType: 'retailer-to-parent'
-    });
-    // Pending activations (if status is tracked)
-    const pendingActivations = await KeyTransferLog.countDocuments({
-      from: retailerId,
-      transferType: 'retailer-to-parent',
-      status: 'pending'
-    });
-    // Active devices (parents with status 'active')
-    const activeDevices = await User.countDocuments({
-      createdBy: retailerId,
-      role: 'parent',
-      status: 'active'
-    });
+    const todaysActivations = childIds.length > 0
+      ? await Key.countDocuments({ assignedTo: { $in: childIds }, assignedAt: { $gte: todayStart, $lte: todayEnd } })
+      : 0;
+
+    // Total activations (keys ever assigned to children)
+    const totalActivations = childIds.length > 0
+      ? await Key.countDocuments({ assignedTo: { $in: childIds } })
+      : 0;
+
+    // Pending activations: keys currently with parents (parents hold key) but not assigned to child
+    const pendingActivations = parentIds.length > 0
+      ? await Key.countDocuments({ currentOwner: { $in: parentIds }, isAssigned: false })
+      : 0;
+
+    // Active devices: distinct children that have an active key (validUntil > now)
+    const now = new Date();
+    const activeChildIds = childIds.length > 0
+      ? await Key.distinct('assignedTo', { assignedTo: { $in: childIds }, isAssigned: true, validUntil: { $gt: now } })
+      : [];
+    const activeDevices = activeChildIds.length;
     // Add assigned/used/transferred/received keys to dashboard summary
     res.json({
       todaysActivations,
@@ -207,7 +219,7 @@ exports.approveKeyRequest = async (req, res) => {
           if (key.currentOwner && String(key.currentOwner) !== String(retailerId)) {
             throw new Error('Key is not available in your pool.');
           }
-          key.isAssigned = true;
+          key.isAssigned = false;
           key.assignedTo = krSession.fromParent;
           key.assignedAt = new Date();
           key.currentOwner = krSession.fromParent;
@@ -221,7 +233,7 @@ exports.approveKeyRequest = async (req, res) => {
           // Atomically pick the oldest unassigned key owned by this retailer
           const key = await Key.findOneAndUpdate(
             { currentOwner: retailerId, isAssigned: false },
-            { $set: { isAssigned: true, assignedTo: krSession.fromParent, assignedAt: new Date(), currentOwner: krSession.fromParent } },
+            { $set: { isAssigned: false, assignedTo: krSession.fromParent, assignedAt: new Date(), currentOwner: krSession.fromParent } },
             { new: true, sort: { createdAt: 1 }, session }
           );
           if (!key) throw new Error('No available keys in your pool to assign. Please add keys or specify a key to assign.');
@@ -272,7 +284,7 @@ exports.approveKeyRequest = async (req, res) => {
       if (!key) key = await Key.findOne({ key: keyToAssignId, isAssigned: false });
       if (!key) return res.status(404).json({ message: 'Key not found or already assigned.' });
       if (key.currentOwner && String(key.currentOwner) !== String(retailerId)) return res.status(400).json({ message: 'Key is not available in your pool.' });
-      key.isAssigned = true;
+      key.isAssigned = false;
       key.assignedTo = krAtomic.fromParent;
       key.assignedAt = new Date();
       key.currentOwner = krAtomic.fromParent;
@@ -283,7 +295,7 @@ exports.approveKeyRequest = async (req, res) => {
     } else {
       const key = await Key.findOneAndUpdate(
         { currentOwner: retailerId, isAssigned: false },
-        { $set: { isAssigned: true, assignedTo: krAtomic.fromParent, assignedAt: new Date(), currentOwner: krAtomic.fromParent } },
+        { $set: { isAssigned: false, assignedTo: krAtomic.fromParent, assignedAt: new Date(), currentOwner: krAtomic.fromParent } },
         { new: true, sort: { createdAt: 1 } }
       );
       if (!key) return res.status(400).json({ message: 'No available keys in your pool to assign. Please add keys or specify a key to assign.' });
@@ -413,7 +425,7 @@ exports.createParent = async (req, res) => {
         console.log('[createParent] Activation key already assigned:', assignedKey);
         return res.status(409).json({ message: 'Activation key already assigned.' });
       }
-      key.isAssigned = true;
+      key.isAssigned = false;
       key.assignedTo = parent._id;
       key.assignedAt = new Date();
       key.currentOwner = parent._id;
@@ -532,36 +544,50 @@ exports.getActivationHistory = async (req, res) => {
   try {
     const retailerId = req.user.id;
     const filter = req.query.filter || 'all';
-    let query = { from: retailerId, transferType: 'retailer-to-parent' };
+    // Resolve parents and children for this retailer
+    const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
+    const childIds = parentIds.length > 0
+      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' }).distinct('_id')
+      : [];
 
-    if (filter === 'today') {
-      const start = new Date();
-      start.setHours(0, 0, 0, 0);
-      const end = new Date();
-      end.setHours(23, 59, 59, 999);
-      query.createdAt = { $gte: start, $lte: end };
+    // If asking for activations (i.e. keys assigned to children)
+    if (filter === 'activations' || filter === 'today' || filter === 'all') {
+      let keyQuery = { assignedTo: { $in: childIds } };
+      if (filter === 'today') {
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+        const end = new Date();
+        end.setHours(23, 59, 59, 999);
+        keyQuery.assignedAt = { $gte: start, $lte: end };
+      }
+      const keys = await Key.find(keyQuery).sort({ assignedAt: -1 });
+      return res.json(keys);
     }
-    // Pending: keys assigned but parent not yet activated (customize as needed)
+
+    // Pending: keys currently with parents (i.e. parent has key but not assigned to child)
     if (filter === 'pending') {
-      query.status = 'pending'; // Only if you track status in KeyTransferLog
+      const pendingKeys = parentIds.length > 0
+        ? await Key.find({ currentOwner: { $in: parentIds }, isAssigned: false }).sort({ createdAt: -1 })
+        : [];
+      return res.json(pendingKeys);
     }
 
+    // Active devices: return children who have active keys
+    if (filter === 'active-devices') {
+      const now = new Date();
+      const activeChildIds = childIds.length > 0
+        ? await Key.distinct('assignedTo', { assignedTo: { $in: childIds }, isAssigned: true, validUntil: { $gt: now } })
+        : [];
+      const children = await User.find({ _id: { $in: activeChildIds } }).select('name phone email deviceImei assignedKey status createdAt');
+      return res.json({ message: 'Active devices fetched successfully.', parents: children });
+    }
+
+    // Fallback: return transfer logs (legacy behavior)
+    let query = { from: retailerId, transferType: 'retailer-to-parent' };
     let logs = await KeyTransferLog.find(query)
       .populate('to', 'name mobile status')
       .populate('keys', 'keyNumber')
       .sort({ createdAt: -1 });
-
-    // Active devices: return parents with status 'active' created by this retailer
-    if (filter === 'active-devices') {
-      const parents = await User.find({ createdBy: retailerId, role: 'parent', status: 'active' })
-        .select('name phone email deviceImei assignedKey status createdAt');
-      return res.json(
-        {
-          message: 'Active devices fetched successfully.',
-          parents
-        });
-    }
-
     res.json(logs);
   } catch (err) {
     res.status(500).json({ message: `Error fetching activation history: ${err.message}` });
