@@ -19,7 +19,7 @@ exports.listOwnedKeys = async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching owned keys for retailer:', err);
-    res.status(500).json({ message: 'Server error while fetching owned keys.' });
+    res.status(500).json({ message: `Error fetching owned keys: ${err.message}` });
   }
 };
 // GET /retailer/key-info
@@ -30,7 +30,7 @@ exports.getKeyInfo = async (req, res) => {
     const keys = await Key.find({ assignedTo: retailerId });
     res.json(keys);
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: `Error fetching key info: ${err.message}` });
   }
 };
 // GET /retailer/reports
@@ -80,7 +80,7 @@ exports.getReports = async (req, res) => {
       totalActiveParents
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: `Error fetching reports: ${err.message}` });
   }
 };
 // GET /retailer/dashboard-summary
@@ -125,7 +125,7 @@ exports.getDashboardSummary = async (req, res) => {
       transferredKeys: retailerUser?.transferredKeys || 0
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: `Error fetching dashboard summary: ${err.message}` });
   }
 };
 
@@ -141,7 +141,7 @@ exports.listParents = async (req, res) => {
           });
     } catch (error) {
         console.error('Error listing parents:', error);
-        res.status(500).json({ message: 'Server error during parent listing.' });
+        res.status(500).json({ message: `Error listing parents: ${error.message}` });
     }
 };
 
@@ -155,7 +155,7 @@ exports.listKeyRequests = async (req, res) => {
     res.json({ requests });
   } catch (err) {
     console.error('Error listing key requests:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: `Error listing key requests: ${err.message}` });
   }
 };
 
@@ -309,7 +309,7 @@ exports.approveKeyRequest = async (req, res) => {
     return res.json({ message: 'Key request approved.', request: krAtomic, assignedKey: assignedKey ? assignedKey.toObject() : null });
   } catch (err) {
     console.error('Error approving key request (fallback):', err);
-    return res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({ message: `Error approving key request: ${err.message}` });
   }
 };
 
@@ -336,7 +336,7 @@ exports.denyKeyRequest = async (req, res) => {
     return res.json({ message: 'Key request denied.' });
   } catch (err) {
     console.error('Error denying key request:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: `Error denying key request: ${err.message}` });
   }
 };
 // POST /retailer/create-parent
@@ -447,7 +447,7 @@ exports.createParent = async (req, res) => {
     console.log('[createParent] Success response sent.');
   } catch (error) {
     console.error('[createParent] Error creating parent:', error);
-    res.status(500).json({ message: `Server error during parent creation. ${error}` });
+    res.status(500).json({ message: `Error creating parent: ${error.message}` });
   }
 };
 
@@ -478,7 +478,7 @@ exports.changeParentPassword = async (req, res) => {
     res.status(200).json({ message: 'Password updated successfully.' });
   } catch (err) {
     console.error('Error changing parent password for retailer:', err);
-    res.status(500).json({ message: 'Server error during parent password change.' });
+    res.status(500).json({ message: `Error changing parent password: ${err.message}` });
   }
 };
 
@@ -505,7 +505,7 @@ exports.getRetailerProfile = async (req, res) => {
       updatedAt: retailer.updatedAt
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error', error: err });
+    res.status(500).json({ message: `Error fetching retailer profile: ${err.message}` });
   }
 };
 // GET /retailer/stats
@@ -524,7 +524,7 @@ exports.getRetailerStats = async (req, res) => {
       totalReceived: retailerUser?.receivedKeys || 0
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error', error: err });
+    res.status(500).json({ message: `Error fetching retailer stats: ${err.message}` });
   }
 };
 
@@ -565,7 +565,7 @@ exports.getActivationHistory = async (req, res) => {
 
     res.json(logs);
   } catch (err) {
-    res.status(500).json({ message: 'Server error', err });
+    res.status(500).json({ message: `Error fetching activation history: ${err.message}` });
   }
 };
 
@@ -577,7 +577,7 @@ exports.keyInfo = async (req, res) => {
     const keys = await Key.find({ assignedTo: retailerId });
     res.json(keys);
   } catch (err) {
-    res.status(500).json({ message: 'Server error', error: err });
+    res.status(500).json({ message: `Error fetching key info: ${err.message}` });
   }
 };
 
