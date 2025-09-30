@@ -9,10 +9,6 @@ const childSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
-    deviceImei: {
-        type: String,
-        unique: true
-    },
     parentId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User', // Parent is now User with role 'parent'

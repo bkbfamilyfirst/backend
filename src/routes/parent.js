@@ -14,5 +14,6 @@ router.post('/child', authenticateToken, authorizeRole(['parent']), parentContro
 
 // POST /parent/request-key - request an activation key (optionally target a retailer)
 router.post('/request-key', authenticateToken, authorizeRole(['parent']), parentController.requestKey);
+router.get('/key-status', authenticateToken, authorizeRole(['parent']), parentController.getKeyStatus);
 
 module.exports = router;

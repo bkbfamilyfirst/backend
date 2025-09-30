@@ -151,22 +151,15 @@ exports.createChild = async (req, res) => {
             return res.status(403).json({ message: 'No available activation key found. Please request a key from your retailer to register a child.' });
         }
 
-        const { name, age, deviceImei } = req.body || {};
+        const { name, age } = req.body || {};
         if (!name || age === undefined) {
             return res.status(400).json({ message: 'Child name and age are required.' });
-        }
-
-        // If deviceImei provided, ensure uniqueness
-        if (deviceImei) {
-            const existing = await Child.findOne({ deviceImei });
-            if (existing) return res.status(409).json({ message: 'Device IMEI already registered to another child.' });
         }
 
         // Assign the available key to the child
         const child = new Child({
             name,
             age,
-            deviceImei: deviceImei || undefined,
             parentId: parent._id,
             assignedKey: availableKey.key
         });
@@ -187,7 +180,6 @@ exports.createChild = async (req, res) => {
                 id: child._id,
                 name: child.name,
                 age: child.age,
-                deviceImei: child.deviceImei,
                 parentId: child.parentId,
                 assignedKey: child.assignedKey
             }
@@ -207,22 +199,64 @@ exports.requestKey = async (req, res) => {
         const parent = await User.findOne({ _id: parentId, role: 'parent' });
         if (!parent) return res.status(404).json({ message: 'Parent not found.' });
 
-        const { retailerId, message } = req.body || {};
+        // Determine retailer from parent.createdBy (no input required from client)
+        const retailerId = parent.createdBy;
 
-        // Create key request
-        const kr = new KeyRequest({ fromParent: parent._id, toRetailer: retailerId || undefined, message: message || '' });
+        // Compose a standard message server-side
+        const message = `Parent ${parent.name} (id: ${parent._id}) has requested an activation key.`;
+
+        // Create key request targeting the retailer found from parent.createdBy (if any)
+        const kr = new KeyRequest({
+            fromParent: parent._id,
+            toRetailer: retailerId || undefined,
+            message
+        });
         await kr.save();
 
-        // Notify retailer if provided
+        // Notify retailer if it exists
         if (retailerId) {
-            const notif = new Notification({ userId: retailerId, type: 'key_request', message: `New key request from parent ${parent.name}`, meta: { keyRequestId: kr._id, parentId: parent._id } });
-            await notif.save();
+            const retailer = await User.findOne({ _id: retailerId, role: 'retailer' });
+            if (retailer) {
+                const notif = new Notification({
+                    userId: retailerId,
+                    type: 'key_request',
+                    message: `New key request from parent ${parent.name}`,
+                    meta: { keyRequestId: kr._id, parentId: parent._id }
+                });
+                await notif.save();
+            }
         }
 
         return res.status(201).json({ message: 'Key request created successfully.', request: kr });
     } catch (error) {
         console.error('Error creating key request:', error);
         return res.status(500).json({ message: 'Server error during key request.' });
+    }
+};
+
+exports.getKeyStatus = async (req, res) => {
+    try {
+        const parentId = req.user && req.user._id;
+        if (!parentId) {
+            return res.status(401).json({ message: 'Authentication required.' });
+        }
+
+        // Find all keys for this parent that are NOT assigned
+        const unassignedKeys = await Key.find({ currentOwner: parentId, isAssigned: false });
+
+        const keyCount = unassignedKeys.length;
+
+        if (keyCount === 0) {
+            return res.status(200).json({ message: 'You have 0 keys available.' });
+        }
+
+        return res.status(200).json({ 
+            message: `You have ${keyCount} keys available.`,
+            keys: unassignedKeys 
+        });
+    } catch (error) {
+        console.error('Error retrieving key status:', error);
+        return res.status(500).json({ message: 'Server error during key status retrieval.' });
     }
 };
 
