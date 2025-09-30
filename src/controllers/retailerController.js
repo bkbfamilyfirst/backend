@@ -342,7 +342,7 @@ exports.denyKeyRequest = async (req, res) => {
 // POST /retailer/create-parent
 exports.createParent = async (req, res) => {
   // Expect 'address' from frontend
-    const { name, username, phone, email, password, assignedKey, address } = req.body;
+    const { name, username, phone, email, password, address, assignedKey, notes } = req.body;
   console.log('[createParent] Incoming request:', { name, username, phone, email, assignedKey, address, notes });
   if (!name || !username || !phone) {
     console.log('[createParent] Missing required fields:', { name, username, phone });
@@ -377,11 +377,11 @@ exports.createParent = async (req, res) => {
       }
     }
     // Hash password (auto-generate or from req.body)
-    let password = req.body.password;
-    if (!password) {
-      password = Math.random().toString(36).slice(-8); // Generate random 8-char password
-      console.log('[createParent] Auto-generated password:', password);
-    }
+    // let password = req.body.password;
+    // if (!password) {
+    //   password = Math.random().toString(36).slice(-8); // Generate random 8-char password
+    //   console.log('[createParent] Auto-generated password:', password);
+    // }
     const passCheck = validatePassword(password);
     if (!passCheck.valid) return res.status(400).json({ message: passCheck.message });
     const hashedPassword = await hashPassword(password);
