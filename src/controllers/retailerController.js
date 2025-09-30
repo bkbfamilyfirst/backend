@@ -505,7 +505,7 @@ exports.getRetailerProfile = async (req, res) => {
       updatedAt: retailer.updatedAt
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err });
   }
 };
 // GET /retailer/stats
@@ -524,7 +524,7 @@ exports.getRetailerStats = async (req, res) => {
       totalReceived: retailerUser?.receivedKeys || 0
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err });
   }
 };
 
@@ -577,7 +577,7 @@ exports.keyInfo = async (req, res) => {
     const keys = await Key.find({ assignedTo: retailerId });
     res.json(keys);
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err });
   }
 };
 
