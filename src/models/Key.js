@@ -33,6 +33,16 @@ const keySchema = new mongoose.Schema({
     },
 }, { timestamps: true });
 
+// Indexes to support activation queries and lookups
+// Keys assigned to a child, query by assignedTo + assignedAt
+keySchema.index({ assignedTo: 1, assignedAt: -1 });
+// Keys currently held by a user (parent) and assignment state
+keySchema.index({ currentOwner: 1, isAssigned: 1 });
+// Query active keys by expiry
+keySchema.index({ validUntil: 1 });
+// Optional: index for createdAt for oldest-first selection
+keySchema.index({ createdAt: 1 });
+
 const Key = mongoose.model('Key', keySchema);
 
 module.exports = Key;

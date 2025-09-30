@@ -37,6 +37,10 @@ const keyTransferLogSchema = new mongoose.Schema({
     },
 }, { timestamps: true });
 
+// Indexes for common queries
+keyTransferLogSchema.index({ fromUser: 1, toUser: 1, date: -1 });
+keyTransferLogSchema.index({ type: 1, status: 1, date: -1 });
+
 const KeyTransferLog = mongoose.model('KeyTransferLog', keyTransferLogSchema);
 
 module.exports = KeyTransferLog; 

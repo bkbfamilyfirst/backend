@@ -45,6 +45,11 @@ const userSchema = new mongoose.Schema({
     refreshTokens: [{ type: String }],
 }, { timestamps: true });
 
+// Useful compound indexes
+userSchema.index({ createdBy: 1, role: 1 });
+userSchema.index({ role: 1, status: 1 });
+userSchema.index({ createdAt: -1 });
+
 const User = mongoose.model('User', userSchema);
 
 module.exports = User;
