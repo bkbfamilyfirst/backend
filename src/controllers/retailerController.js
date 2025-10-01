@@ -538,139 +538,97 @@ exports.getRetailerStats = async (req, res) => {
   }
 };
 
-// GET /retailer/activation-history with filter support
+// GET /retailer/activation-history with filter support (returns paginated keys)
 exports.getActivationHistory = async (req, res) => {
   try {
     const retailerId = req.user.id;
     const filter = req.query.filter || 'all';
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const skip = (page - 1) * limit;
 
-    // Resolve parents for this retailer (lean for faster reads)
-    const parents = await User.find({ createdBy: retailerId, role: 'parent' })
-      .select('_id name phone email status createdAt')
+    // Resolve parents and children ids
+    const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
+    const childIds = parentIds.length > 0
+      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' }).distinct('_id')
+      : [];
+
+    // Build key query based on filter
+    const now = new Date();
+    let keyQuery = {};
+    if (filter === 'today') {
+      // Keys assigned to children today
+      const start = new Date(); start.setHours(0,0,0,0);
+      const end = new Date(); end.setHours(23,59,59,999);
+      keyQuery = { assignedTo: { $in: childIds }, isAssigned: true, assignedAt: { $gte: start, $lte: end } };
+    } else if (filter === 'pending') {
+      // Keys currently with parents (received by parent but not assigned to child)
+      keyQuery = { currentOwner: { $in: parentIds }, isAssigned: false };
+    } else if (filter === 'active') {
+      // Keys assigned to children and still valid
+      keyQuery = { assignedTo: { $in: childIds }, isAssigned: true, validUntil: { $gt: now } };
+    } else if (filter === 'activations') {
+      // Keys assigned to children (no date filter)
+      keyQuery = { assignedTo: { $in: childIds }, isAssigned: true };
+    } else {
+      // 'all' - include keys held by parents or assigned to children under this retailer
+      keyQuery = { $or: [ { currentOwner: { $in: parentIds } }, { assignedTo: { $in: childIds } } ] };
+    }
+
+    // If no parents/children exist, return empty
+    if (parentIds.length === 0 && childIds.length === 0) {
+      return res.json({ total: 0, page, limit, keys: [] });
+    }
+
+    // Count and fetch keys with pagination
+    const total = await Key.countDocuments(keyQuery);
+    const keys = await Key.find(keyQuery)
+      .sort({ assignedAt: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('currentOwner', 'name role')
+      .populate('assignedTo', 'name role createdBy')
       .lean();
 
-    const parentIds = parents.map(p => p._id);
+    // Format keys for response, include parent/child info where applicable
+    const formatted = await Promise.all(keys.map(async k => {
+      // Determine parent if currentOwner is a parent
+      let parent = null;
+      if (k.currentOwner) {
+        const u = await User.findById(k.currentOwner).select('_id name role createdBy').lean();
+        if (u && u.role === 'parent') parent = { id: u._id, name: u.name };
+      }
+      // Determine child if assignedTo
+      let child = null;
+      if (k.assignedTo) {
+        const c = await User.findById(k.assignedTo).select('_id name createdBy').lean();
+        if (c) child = { id: c._id, name: c.name, parentId: c.createdBy };
+      }
 
-    // Resolve children for those parents
-    const children = parentIds.length > 0
-      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' })
-          .select('_id name phone email assignedKey createdBy status createdAt')
-          .lean()
-      : [];
-
-    // Map children by parent id (createdBy)
-    const childrenByParent = children.reduce((acc, child) => {
-      const pid = String(child.createdBy);
-      if (!acc[pid]) acc[pid] = [];
-      acc[pid].push(child);
-      return acc;
-    }, {});
-
-    // Build date filter for "today" if needed
-    let assignedAtFilter = null;
-    if (filter === 'today') {
-      const start = new Date();
-      start.setHours(0, 0, 0, 0);
-      const end = new Date();
-      end.setHours(23, 59, 59, 999);
-      assignedAtFilter = { $gte: start, $lte: end };
-    }
-
-    // Fetch keys assigned to children (activations)
-    const childIds = children.map(c => c._id);
-    const keyQueryForChildren = {
-      assignedTo: { $in: childIds },
-      isAssigned: true
-    };
-    if (assignedAtFilter) keyQueryForChildren.assignedAt = assignedAtFilter;
-
-    const keysAssignedToChildren = childIds.length > 0
-      ? await Key.find(keyQueryForChildren).lean()
-      : [];
-
-    // Map keys by child id
-    const keysByChild = keysAssignedToChildren.reduce((acc, key) => {
-      const cid = String(key.assignedTo);
-      if (!acc[cid]) acc[cid] = [];
-      acc[cid].push({
-        id: key._id,
-        key: key.key,
-        assignedAt: key.assignedAt,
-        validUntil: key.validUntil,
-        isAssigned: key.isAssigned,
-        currentOwner: key.currentOwner,
-      });
-      return acc;
-    }, {});
-
-    // Fetch pending keys held by parents (parent has key but not assigned to child)
-    const pendingKeys = parentIds.length > 0
-      ? await Key.find({ currentOwner: { $in: parentIds }, isAssigned: false }).lean()
-      : [];
-
-    // Map pending keys by parent id (currentOwner)
-    const pendingByParent = pendingKeys.reduce((acc, key) => {
-      const pid = String(key.currentOwner);
-      if (!acc[pid]) acc[pid] = [];
-      acc[pid].push({
-        id: key._id,
-        key: key.key,
-        createdAt: key.createdAt,
-      });
-      return acc;
-    }, {});
-
-    // Build the response: list of parents with their activated child details (if any) and pending (if any)
-    const parentsList = parents.map(parent => {
-      const pid = String(parent._id);
-      const childList = (childrenByParent[pid] || []).map(child => {
-        const cid = String(child._id);
-        return {
-          id: child._id,
-          name: child.name,
-          phone: child.phone,
-          email: child.email,
-          deviceImei: child.deviceImei,
-          status: child.status,
-          createdAt: child.createdAt,
-          activatedKeys: keysByChild[cid] || []
-        };
-      });
+      // Status normalization
+      let status = 'unknown';
+      if (k.isAssigned && k.assignedTo) {
+        status = (k.validUntil && new Date(k.validUntil) > now) ? 'active' : 'expired';
+      } else if (k.currentOwner && parentIds.some(id => String(id) === String(k.currentOwner))) {
+        status = 'pending';
+      } else {
+        status = 'in_pool';
+      }
 
       return {
-        id: parent._id,
-        name: parent.name,
-        phone: parent.phone,
-        email: parent.email,
-        status: parent.status,
-        createdAt: parent.createdAt,
-        // activated children (may be empty array)
-        children: childList,
-        // pending keys (may be empty array)
-        pendingKeys: pendingByParent[pid] || []
+        id: k._id,
+        key: k.key,
+        isAssigned: k.isAssigned,
+        assignedAt: k.assignedAt,
+        validUntil: k.validUntil,
+        currentOwner: k.currentOwner,
+        parent,
+        child,
+        status
       };
-    });
+    }));
 
-    // Filter output according to requested filter:
-    // - 'activations' / 'today' / 'all' => return parentsList (parents with children; children include activatedKeys)
-    // - 'pending' => return only parents that have pendingKeys
-    // - 'active-devices' => return children with active keys (unchanged)
-    if (filter === 'pending') {
-      const parentsWithPending = parentsList.filter(p => (p.pendingKeys || []).length > 0);
-      return res.json({ message: 'Pending activations fetched.', parents: parentsWithPending });
-    }
-
-    if (filter === 'active-devices') {
-      const now = new Date();
-      const activeChildIds = childIds.length > 0
-        ? await Key.distinct('assignedTo', { assignedTo: { $in: childIds }, isAssigned: true, validUntil: { $gt: now } })
-        : [];
-      const activeChildren = children.filter(c => activeChildIds.some(id => String(id) === String(c._id)));
-      return res.json({ message: 'Active devices fetched successfully.', children: activeChildren });
-    }
-
-    // activations / today / all
-    return res.json({ message: 'Activation history fetched successfully.', parents: parentsList });
+    res.json({ total, page, limit, keys: formatted });
   } catch (err) {
     res.status(500).json({ message: `Error fetching activation history: ${err.message}` });
   }
