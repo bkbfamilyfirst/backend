@@ -564,7 +564,7 @@ exports.getActivationHistory = async (req, res) => {
     } else if (filter === 'pending') {
       // Keys currently with parents (received by parent but not assigned to child)
       keyQuery = { currentOwner: { $in: parentIds }, isAssigned: false };
-    } else if (filter === 'active') {
+    } else if (filter === 'active-devices') {
       // Keys assigned to children and still valid
       keyQuery = { assignedTo: { $in: childIds }, isAssigned: true, validUntil: { $gt: now } };
     } else if (filter === 'activations') {
