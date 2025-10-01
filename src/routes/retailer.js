@@ -36,7 +36,7 @@ router.patch('/key-requests/:id/deny', authenticateToken, authorizeRole(['retail
 
 // GET /retailer/key-info
 router.get('/key-info', authenticateToken, authorizeRole(['retailer']), retailerController.getKeyInfo);
-
+router.post('/transfer-keys-to-parent', authenticateToken, authorizeRole(['retailer']), retailerController.transferKeysToParent);
 // POST /retailer/logout
 router.post('/logout', authenticateToken, authorizeRole(['retailer']), retailerController.logout);
 

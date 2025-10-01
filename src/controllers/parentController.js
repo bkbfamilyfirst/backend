@@ -204,7 +204,7 @@ exports.requestKey = async (req, res) => {
         const retailerId = parent.createdBy;
 
         // Compose a standard message server-side
-        const message = `Parent ${parent.name} (id: ${parent._id}) has requested an activation key.`;
+        const message = `Parent ${parent.name} has requested an activation key.`;
 
         // Create key request targeting the retailer found from parent.createdBy (if any)
         const kr = new KeyRequest({

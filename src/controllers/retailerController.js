@@ -6,7 +6,6 @@ const jwt = require('jsonwebtoken');
 const KeyRequest = require('../models/KeyRequest');
 const Notification = require('../models/Notification');
 const mongoose = require('mongoose');
-
 // GET /retailer/owned-keys
 exports.listOwnedKeys = async (req, res) => {
   try {
@@ -687,6 +686,71 @@ exports.keyInfo = async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: `Error fetching key info: ${err.message}` });
   }
+};
+
+// POST /retailer/transfer-keys-to-parent
+exports.transferKeysToParent = async (req, res) => {
+    try {
+        const { parentId, keysToTransfer } = req.body;
+        if (!parentId || !keysToTransfer || keysToTransfer <= 0) {
+            return res.status(400).json({ message: 'Please provide a valid Parent ID and a positive number of keys to transfer.' });
+        }
+        const parentUser = await User.findOne({ _id: parentId, role: 'parent', createdBy: req.user._id });
+        if (!parentUser) {
+            return res.status(404).json({ message: 'Parent not found.' });
+        }
+        // Count available unassigned keys currently owned by DB
+        const availableUnassignedKeysCount = await Key.countDocuments({ isAssigned: false, currentOwner: req.user._id });
+        if (keysToTransfer > availableUnassignedKeysCount) {
+            return res.status(400).json({ message: `Cannot transfer ${keysToTransfer} keys. Only ${availableUnassignedKeysCount} unassigned keys available for this DB.` });
+        }
+        // Find and update a batch of unassigned keys owned by this DB
+        const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
+        const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        try{
+            await Key.updateMany(
+                { _id: { $in: keyIdsToUpdate } },
+                { $set: { currentOwner: parentUser._id } },
+                { session }
+            );
+
+        // Increment transferredKeys for Retailer (sender)
+        await User.updateOne(
+            { _id: req.user._id },
+            { $inc: { transferredKeys: keysToTransfer } },
+            { session }
+        );
+        // Increment receivedKeys for Parent (receiver)
+        await User.updateOne(
+            { _id: parentUser._id },
+            { $inc: { receivedKeys: keysToTransfer } },
+            { session }
+        );
+        // Create KeyTransferLog
+        const newKeyTransferLog = new KeyTransferLog({
+            fromUser: req.user._id,
+            toUser: parentId,
+            count: keysToTransfer,
+            status: 'completed',
+            type: 'bulk',
+            notes: `Bulk transferred ${keysToTransfer} keys from Retailer to Parent: ${parentUser.name}`
+        });
+        await newKeyTransferLog.save({ session });
+        await session.commitTransaction();
+        res.status(200).json({ message: 'Keys transferred to Parent successfully.' });
+        } catch (e) {
+            await session.abortTransaction();
+            console.error('Error during key transfer transaction:', e);
+            res.status(500).json({ message: `Error transferring keys: ${e.message}` });
+        } finally {
+            session.endSession();
+        }
+    } catch (error) {
+        console.error('Error transferring keys to Parent:', error);
+        res.status(500).json({ message: `Server error during key transfer. ${error.message}` });
+    }
 };
 
 // POST /retailer/logout

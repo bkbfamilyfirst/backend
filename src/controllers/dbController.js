@@ -607,20 +607,27 @@ const transferKeysToRetailer = async (req, res) => {
         // Find and update a batch of unassigned keys owned by this DB
         const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer);
         const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
+        
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        try{
         await Key.updateMany(
             { _id: { $in: keyIdsToUpdate } },
-            { $set: { currentOwner: retailerUser._id } }
+            { $set: { currentOwner: retailerUser._id } },
+            { session }
         );
 
         // Increment transferredKeys for DB (sender)
         await User.updateOne(
             { _id: req.user._id },
-            { $inc: { transferredKeys: keysToTransfer } }
+            { $inc: { transferredKeys: keysToTransfer } },
+            { session }
         );
         // Increment receivedKeys for Retailer (receiver)
         await User.updateOne(
             { _id: retailerUser._id },
-            { $inc: { receivedKeys: keysToTransfer } }
+            { $inc: { receivedKeys: keysToTransfer } },
+            { session }
         );
         // Create KeyTransferLog
         const newKeyTransferLog = new KeyTransferLog({
@@ -631,8 +638,20 @@ const transferKeysToRetailer = async (req, res) => {
             type: 'bulk',
             notes: `Bulk transferred ${keysToTransfer} keys from DB to Retailer: ${retailerUser.name}`
         });
-        await newKeyTransferLog.save();
+
+        await newKeyTransferLog.save({ session });
+
+        await session.commitTransaction();
+        
         res.status(200).json({ message: 'Keys transferred to Retailer successfully.' });
+    } catch(error) {
+        await session.abortTransaction();
+        console.error('Error transferring keys to Retailer:', error);
+        res.status(500).json({ message: `Server error during key transfer. ${error.message}` });
+    } finally {
+        session.endSession();
+    }
+
     } catch (error) {
         console.error('Error transferring keys to Retailer:', error);
         res.status(500).json({ message: 'Server error during key transfer.' });

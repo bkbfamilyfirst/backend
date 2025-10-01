@@ -2,7 +2,6 @@ const Key = require('../models/Key');
 const User = require('../models/User');
 const KeyTransferLog = require('../models/KeyTransferLog');
 const bcrypt = require('bcrypt');
-
 // GET /ss/dashboard/summary
 const getDashboardSummary = async (req, res) => {
     try {
@@ -436,6 +435,8 @@ const transferKeysToDb = async (req, res) => {
         // Find and update a batch of unassigned keys owned by this SS
         const keysToMarkAssigned = await Key.find({ isAssigned: false, currentOwner: req.user._id }).limit(keysToTransfer).session(session);
         const keyIdsToUpdate = keysToMarkAssigned.map(key => key._id);
+        
+        
         await Key.updateMany(
             { _id: { $in: keyIdsToUpdate } },
             { $set: { currentOwner: dbUser._id } },
