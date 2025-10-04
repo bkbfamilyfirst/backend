@@ -187,7 +187,7 @@ exports.createChild = async (req, res) => {
         });
     } catch (error) {
         console.error('Error creating child:', error);
-        return res.status(500).json({ message: 'Server error during child creation.' });
+        return res.status(500).json({ message: `Server error during child creation. ${error.message}` });
     }
 };
 
@@ -260,4 +260,3 @@ exports.getKeyStatus = async (req, res) => {
         return res.status(500).json({ message: 'Server error during key status retrieval.' });
     }
 };
-
