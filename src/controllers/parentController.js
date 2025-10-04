@@ -156,23 +156,27 @@ exports.createChild = async (req, res) => {
         session.startTransaction();
         // Atomically find & mark a key as temporarily claimed (isAssigned true prevents others claiming)
         const availableKey = await Key.findOneAndUpdate(
-            { currentOwner: parent._id, isAssigned: false },
-            { $set: { isAssigned: true } },
-            { session, new: true }
+          { currentOwner: parent._id, isAssigned: false },
+          { $set: { isAssigned: true } },
+          { session, new: true }
         );
 
-        if (!availableKey) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(403).json({ message: 'No available activation key found. Please request a key from your retailer.' });
+        if (!availableKey || !availableKey._id) {
+          await session.abortTransaction();
+          session.endSession();
+          console.error('No availableKey returned or missing _id', { parentId: parent._id, availableKey });
+          return res.status(403).json({ message: 'No available activation key found. Please request a key from your retailer.' });
         }
+
+        // optional: log for debugging (remove in production)
+        console.debug('Claimed key for child creation', { keyId: availableKey._id, keyValue: availableKey.key });
 
         // Create child with assignedKey referencing the Key._id
         const child = new Child({
-            name,
-            age,
-            parentId: parent._id,
-            assignedKey: availableKey._id
+          name,
+          age,
+          parentId: parent._id,
+          assignedKey: availableKey._id
         });
         await child.save({ session });
 
