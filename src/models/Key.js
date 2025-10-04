@@ -29,7 +29,6 @@ const keySchema = new mongoose.Schema({
     },
     validUntil: {
         type: Date,
-        required: true,
     },
 }, { timestamps: true });
 

@@ -15,9 +15,11 @@ const childSchema = new mongoose.Schema({
         required: true
     },
     assignedKey: {
-        type: String,
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Key',
+        required: true,
         unique: true,
-        sparse: true // Only for children
+        index: true
     }
 
 }, { timestamps: true });

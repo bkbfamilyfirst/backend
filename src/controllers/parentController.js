@@ -146,7 +146,7 @@ exports.createChild = async (req, res) => {
         if (!parent) return res.status(404).json({ message: 'Parent not found.' });
 
         // Find an available activation key owned by this parent (not yet assigned to a child)
-        const availableKey = await Key.findOne({ currentOwner: parent._id, isAssigned: false });
+        const availableKey = await Key.findOne({ currentOwner: parent._id, isAssigned: false }).lean();
         if (!availableKey) {
             return res.status(403).json({ message: 'No available activation key found. Please request a key from your retailer to register a child.' });
         }
@@ -157,24 +157,26 @@ exports.createChild = async (req, res) => {
         }
 
         // Assign the available key to the child
+        // create child first
         const child = new Child({
             name,
             age,
             parentId: parent._id,
-            assignedKey: availableKey.key
+            assignedKey: availableKey._id
         });
         await child.save();
 
-        // Mark the key as assigned to this child
-        availableKey.isAssigned = true;
-        availableKey.assignedTo = child._id;
-        availableKey.assignedAt = new Date();
-        availableKey.validUntil = new Date(new Date().setFullYear(new Date().getFullYear() + 2));
-        await availableKey.save();
-
+        // mark the key as assigned to this child (use update to avoid stale lean doc)
+        const twoYears = new Date();
+        twoYears.setFullYear(twoYears.getFullYear() + 2);
+        await Key.updateOne(
+            { _id: availableKey._id, currentOwner: parent._id, isAssigned: false },
+            { $set: { isAssigned: true, assignedTo: child._id, assignedAt: new Date(), validUntil: twoYears } }
+        );
+ 
         // Increment parent's transferredKeys counter (if tracking usage)
         await User.updateOne({ _id: parent._id }, { $inc: { transferredKeys: 1 } });
-
+ 
         return res.status(201).json({
             message: 'Child created successfully.',
             child: {
@@ -182,12 +184,12 @@ exports.createChild = async (req, res) => {
                 name: child.name,
                 age: child.age,
                 parentId: child.parentId,
-                assignedKey: child.assignedKey
+                assignedKey: child.assignedKey // now ObjectId referencing Key
             }
         });
     } catch (error) {
         console.error('Error creating child:', error);
-        return res.status(500).json({ message: `Server error during child creation. ${error.message}` });
+        return res.status(500).json({ message: 'Server error during child creation.' });
     }
 };
 
