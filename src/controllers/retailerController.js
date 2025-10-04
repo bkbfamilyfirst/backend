@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Child = require('../models/Child');
 const Key = require('../models/Key');
 const KeyTransferLog = require('../models/KeyTransferLog');
 const { validatePassword, hashPassword } = require('../utils/password');
@@ -550,7 +551,7 @@ exports.getActivationHistory = async (req, res) => {
     // Resolve parents and children ids
     const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
     const childIds = parentIds.length > 0
-      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' }).distinct('_id')
+      ? await Child.find({ createdBy: { $in: parentIds } }).distinct('_id')
       : [];
 
     // Build key query based on filter
