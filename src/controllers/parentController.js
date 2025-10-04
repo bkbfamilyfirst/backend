@@ -6,6 +6,7 @@ const Device = require('../models/Device');
 const Child = require('../models/Child');
 const KeyRequest = require('../models/KeyRequest');
 const Notification = require('../models/Notification');
+const mongoose = require('mongoose'); // add near other requires
 
 // GET /parent/profile
 exports.getParentProfile = async (req, res) => {
@@ -136,47 +137,60 @@ exports.listParents = async (req, res) => {
 };
 
 // POST /parent/child - create a child for the authenticated parent
+// Replace createChild with transaction-safe implementation that atomically claims a key and assigns it to the new child
 exports.createChild = async (req, res) => {
+    const session = await mongoose.startSession();
     try {
         const parentId = req.user && req.user._id;
         if (!parentId) return res.status(401).json({ message: 'Authentication required.' });
 
-        // Ensure caller is a parent and fetch their record
         const parent = await User.findOne({ _id: parentId, role: 'parent' });
         if (!parent) return res.status(404).json({ message: 'Parent not found.' });
-
-        // Find an available activation key owned by this parent (not yet assigned to a child)
-        const availableKey = await Key.findOne({ currentOwner: parent._id, isAssigned: false }).lean();
-        if (!availableKey) {
-            return res.status(403).json({ message: 'No available activation key found. Please request a key from your retailer to register a child.' });
-        }
 
         const { name, age } = req.body || {};
         if (!name || age === undefined) {
             return res.status(400).json({ message: 'Child name and age are required.' });
         }
 
-        // Assign the available key to the child
-        // create child first
+        // Start transaction to avoid race conditions when claiming a key
+        session.startTransaction();
+        // Atomically find & mark a key as temporarily claimed (isAssigned true prevents others claiming)
+        const availableKey = await Key.findOneAndUpdate(
+            { currentOwner: parent._id, isAssigned: false },
+            { $set: { isAssigned: true } },
+            { session, new: true }
+        );
+
+        if (!availableKey) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(403).json({ message: 'No available activation key found. Please request a key from your retailer.' });
+        }
+
+        // Create child with assignedKey referencing the Key._id
         const child = new Child({
             name,
             age,
             parentId: parent._id,
             assignedKey: availableKey._id
         });
-        await child.save();
+        await child.save({ session });
 
-        // mark the key as assigned to this child (use update to avoid stale lean doc)
+        // Finalize key assignment: set assignedTo, assignedAt, validUntil (2 years)
         const twoYears = new Date();
         twoYears.setFullYear(twoYears.getFullYear() + 2);
         await Key.updateOne(
-            { _id: availableKey._id, currentOwner: parent._id, isAssigned: false },
-            { $set: { isAssigned: true, assignedTo: child._id, assignedAt: new Date(), validUntil: twoYears } }
+            { _id: availableKey._id, isAssigned: true }, // ensure we still hold the claim
+            { $set: { assignedTo: child._id, assignedAt: new Date(), validUntil: twoYears } },
+            { session }
         );
- 
-        // Increment parent's transferredKeys counter (if tracking usage)
-        await User.updateOne({ _id: parent._id }, { $inc: { transferredKeys: 1 } });
- 
+
+        // Increment parent's transferredKeys counter
+        await User.updateOne({ _id: parent._id }, { $inc: { transferredKeys: 1 } }, { session });
+
+        await session.commitTransaction();
+        session.endSession();
+
         return res.status(201).json({
             message: 'Child created successfully.',
             child: {
@@ -184,12 +198,14 @@ exports.createChild = async (req, res) => {
                 name: child.name,
                 age: child.age,
                 parentId: child.parentId,
-                assignedKey: child.assignedKey // now ObjectId referencing Key
+                assignedKey: child.assignedKey
             }
         });
     } catch (error) {
+        try { await session.abortTransaction(); } catch (e) {}
+        session.endSession();
         console.error('Error creating child:', error);
-        return res.status(500).json({ message: 'Server error during child creation.' });
+        return res.status(500).json({ message: `Server error during child creation. ${error?.message}` });
     }
 };
 
