@@ -46,7 +46,7 @@ exports.getReports = async (req, res) => {
     // Resolve parents and children belonging to this retailer
     const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
     const childIds = parentIds.length > 0
-      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' }).distinct('_id')
+      ? await Child.find({ parentId: { $in: parentIds } }).distinct('_id')
       : [];
 
     // Period-based activations (keys assigned to children)
@@ -98,7 +98,7 @@ exports.getDashboardSummary = async (req, res) => {
     // Resolve parents and children for this retailer
     const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
     const childIds = parentIds.length > 0
-      ? await User.find({ createdBy: { $in: parentIds }, role: 'child' }).distinct('_id')
+      ? await Child.find({ parentId: { $in: parentIds } }).distinct('_id')
       : [];
 
     // Today's activations (keys assigned to children today)
@@ -551,7 +551,7 @@ exports.getActivationHistory = async (req, res) => {
     // Resolve parents and children ids
     const parentIds = await User.find({ createdBy: retailerId, role: 'parent' }).distinct('_id');
     const childIds = parentIds.length > 0
-      ? await Child.find({ createdBy: { $in: parentIds } }).distinct('_id')
+      ? await Child.find({ parentId: { $in: parentIds } }).distinct('_id')
       : [];
 
     // Build key query based on filter
