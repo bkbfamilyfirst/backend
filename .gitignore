@@ -11,6 +11,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
+.github
 
 # Dependency directories (though node_modules is most common)
 jspm_packages/
