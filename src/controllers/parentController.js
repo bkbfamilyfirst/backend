@@ -16,13 +16,19 @@ exports.getParentProfile = async (req, res) => {
         if (!parent) {
             return res.status(404).json({ message: 'Parent not found.' });
         }
+
+        // Find keys currently owned by this parent (currentOwner)
+        const ownedKeys = await Key.find({ currentOwner: parent._id })
+            .select('_id key isAssigned assignedTo assignedAt validUntil currentOwner createdAt')
+            .lean();
+
         res.status(200).json({
             id: parent._id,
             name: parent.name,
             email: parent.email,
             phone: parent.phone,
-            deviceImei: parent.deviceImei,
-            assignedKey: parent.assignedKey,
+            // return keys owned by parent as assignedKey (array of key objects)
+            assignedKey: ownedKeys,
             address: parent.address,
             status: parent.status,
             lastLogin: parent.lastLogin,

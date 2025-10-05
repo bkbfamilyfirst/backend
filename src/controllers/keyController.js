@@ -4,18 +4,17 @@ const User = require('../models/User'); // Parent is now User with role 'parent'
 // GET /key/info
 exports.getKeyInfo = async (req, res) => {
     try {
-        const { key, parentId, deviceId } = req.query;
+        const { key, parentId } = req.query;
 
-        if (!key && !parentId && !deviceId) {
-            return res.status(400).json({ message: 'Please provide key, parentId, or deviceId.' });
+        if (!key && !parentId) {
+            return res.status(400).json({ message: 'Please provide key or parentId.' });
         }
 
         let query = {};
         if (key) query.key = key;
-        if (parentId) query.assignedTo = parentId;
-        if (deviceId) query.deviceId = deviceId; // Assuming deviceId is stored in Key model
+        if (parentId) query.currentOwner = parentId;
 
-        const keyInfo = await Key.findOne(query).populate('assignedTo', 'name');
+        const keyInfo = await Key.findOne(query).populate('assignedTo', 'name'); 
 
         if (!keyInfo) {
             return res.status(404).json({ message: 'Key not found.' });
