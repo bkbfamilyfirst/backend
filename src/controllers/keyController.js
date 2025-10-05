@@ -14,7 +14,7 @@ exports.getKeyInfo = async (req, res) => {
         if (key) query.key = key;
         if (parentId) query.currentOwner = parentId;
 
-        const keyInfo = await Key.find(query).populate('assignedTo', 'name'); 
+        const keyInfo = await Key.findOne(query).populate('assignedTo', 'name'); 
 
         if (!keyInfo) {
             return res.status(404).json({ message: 'Key not found.' });
